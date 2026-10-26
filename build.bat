@@ -1,20 +1,51 @@
 @echo off
-rem Build the unified DeskBoxApp (MSVC, static CRT).
-call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" >nul
+setlocal
+cd /d "%~dp0"
 
-echo [release] cl /O2 /MT main.cpp box_balance.cpp box_shortcut.cpp -^> DeskBoxApp.exe
-cl /nologo /O2 /EHsc /utf-8 /DUNICODE /D_UNICODE /MT main.cpp box_balance.cpp box_shortcut.cpp /link /subsystem:windows /out:DeskBoxApp.exe
-if %ERRORLEVEL% neq 0 ( echo BUILD FAILED & exit /b %ERRORLEVEL% )
+set CSC=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe
+if not exist "%CSC%" set CSC=C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe
 
-rem Sign with the local self-signed code-signing cert so Windows no longer shows
-rem the "unknown publisher" warning on startup.
-set SIGNTOOL=C:\Program Files (x86)\Windows Kits\10\bin\10.0.22000.0\x64\signtool.exe
-if exist "%SIGNTOOL%" (
-  "%SIGNTOOL%" sign /n "DeskBox Local" /fd SHA256 "DeskBoxApp.exe" >nul 2>&1
-  if %ERRORLEVEL% equ 0 ( echo SIGNED  ^(DeskBox Local^) ) else ( echo SIGN SKIPPED - local cert not found )
-) else (
-  echo SIGN SKIPPED - signtool.exe not found
+echo Compiling ...
+"%CSC%" /nologo /target:winexe /platform:anycpu /codepage:65001 /optimize+ ^
+  /out:DeskBoxes.exe ^
+  /win32icon:app.ico ^
+  /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll ^
+  /r:System.Runtime.Serialization.dll /r:System.Net.dll ^
+  src\BoxConfig.cs src\IconLoader.cs src\AutoOrganizer.cs src\OrganizeForm.cs ^
+
+  src\PanelForm.cs src\BalanceData.cs src\BalanceForm.cs src\ShortcutForm.cs ^
+
+  src\TrayNotify.cs src\KeepOnDesktop.cs src\Program.cs
+
+if errorlevel 1 (
+  echo [FAILED]
+  exit /b 1
 )
 
-echo BUILD OK
-dir /b DeskBoxApp.exe
+echo [OK] built DeskBoxes.exe
+for %%F in (DeskBoxes.exe) do echo    size: %%~zF bytes
+
+rem ---- sign (recompiling always drops the signature) ----
+powershell -NoProfile -ExecutionPolicy Bypass -File "tools\sign.ps1"
+
+rem ---------------------------------------------------------------
+rem Deploy the runtime copy to %LOCALAPPDATA%\Programs\DeskBoxes.
+rem D:\ai_code carries an explicit Medium integrity label, which forces
+rem child processes down to Medium and makes Shell_NotifyIcon fail with
+rem error 5 (access denied) against a High-integrity explorer.
+rem ---------------------------------------------------------------
+set DEST=%LOCALAPPDATA%\Programs\DeskBoxes
+if not exist "%DEST%" mkdir "%DEST%"
+if not exist "%DEST%\data" mkdir "%DEST%\data"
+
+copy /Y DeskBoxes.exe "%DEST%\" >nul 2>&1
+if errorlevel 1 (
+  echo.
+  echo [WARN] exe is in use - close DeskBoxes first, then run build.bat again
+) else (
+  copy /Y app.ico "%DEST%\" >nul 2>&1
+  if not exist "%DEST%\data\history.csv" copy /Y data\history.csv "%DEST%\data\" >nul 2>&1
+  echo [OK] deployed to %DEST%
+)
+
+endlocal
