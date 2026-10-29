@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -1316,7 +1316,10 @@ namespace DeskBoxes
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("刷新图标", null, delegate { IconLoader.Clear(); Render(); });
 
+            DeskGuard.RaiseToFront(Handle);      // 面板先到最前，菜单才压得住其他 TOPMOST 盒子
             m.Show(this, at);
+
+            DeskGuard.RaiseMenu(m.Handle);
         }
 
         public event EventHandler RequestNewSection;
@@ -1337,7 +1340,10 @@ namespace DeskBoxes
                     delegate { if (RequestAutoOrganize != null) RequestAutoOrganize(this, EventArgs.Empty); });
                 lm.Items.Add("新建盒子容纳它们…", null,
                     delegate { if (RequestNewSection != null) RequestNewSection(this, EventArgs.Empty); });
+                DeskGuard.RaiseToFront(Handle);      // 面板先到最前，菜单才压得住其他 TOPMOST 盒子
                 lm.Show(this, at);
+
+            DeskGuard.RaiseMenu(lm.Handle);
                 return;
             }
 
@@ -1382,7 +1388,10 @@ namespace DeskBoxes
                 Relayout(); Render(); RaiseChanged();
             });
 
+            DeskGuard.RaiseToFront(Handle);      // 面板先到最前，菜单才压得住其他 TOPMOST 盒子
             m.Show(this, at);
+
+            DeskGuard.RaiseMenu(m.Handle);
         }
 
         private void ShowItemMenu(int sec, int item, Point at)
@@ -1467,7 +1476,10 @@ namespace DeskBoxes
                 Relayout(); Render(); RaiseChanged();
             });
 
+            DeskGuard.RaiseToFront(Handle);      // 面板先到最前，菜单才压得住其他 TOPMOST 盒子
             m.Show(this, at);
+
+            DeskGuard.RaiseMenu(m.Handle);
         }
 
         private void AddByDialog(int sec)

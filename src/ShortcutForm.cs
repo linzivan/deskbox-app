@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -501,7 +501,10 @@ namespace DeskBoxes
                 Raise();
             });
 
+            DeskGuard.RaiseToFront(Handle);
             m.Show(this, at);
+
+            DeskGuard.RaiseMenu(m.Handle);
         }
 
         private void AddItem()

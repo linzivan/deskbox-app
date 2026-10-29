@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -53,6 +53,7 @@ namespace DeskBoxes
         private const uint SWP_FRAMECHANGED = 0x0020;
         private const uint SWP_NOZORDER = 0x0004;
         private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+        private static readonly IntPtr HWND_TOP = IntPtr.Zero;
         private static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
 
         private static List<Form> _forms = new List<Form>();
@@ -95,6 +96,33 @@ namespace DeskBoxes
         public static void Unregister(Form form)
         {
             if (form != null) _forms.Remove(form);
+        }
+
+        /// <summary>
+        /// 把窗口抬到 TOPMOST 层的最前面。
+        /// 菜单是「所属窗口」，会叠在 owner 之上——所以只要先把面板抬到所有盒子之上，
+        /// 弹出的设置菜单就不会被 Hermes/余额等 TOPMOST 盒子盖住。
+        /// </summary>
+        public static void RaiseToFront(IntPtr h)
+        {
+            if (h == IntPtr.Zero) return;
+            try
+            {
+                SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                SetWindowPos(h, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 把弹出菜单抬到 TOPMOST 层。
+        /// 盒子本身在桌面前台时是 TOPMOST，普通菜单会被压在盒子下面（点设置却看不到菜单）。
+        /// </summary>
+        public static void RaiseMenu(IntPtr h)
+        {
+            if (h == IntPtr.Zero) return;
+            try { SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); }
+            catch { }
         }
 
 
