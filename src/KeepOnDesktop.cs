@@ -41,6 +41,12 @@ namespace DeskBoxes
         private static extern bool SetWindowPos(IntPtr hWnd, IntPtr after,
             int x, int y, int cx, int cy, uint flags);
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT { public int Left, Top, Right, Bottom; }
+
+        [DllImport("user32.dll")]
+        private static extern bool GetWindowRect(IntPtr hWnd, out RECT rc);
+
         private const int EVENT_SYSTEM_FOREGROUND = 3;
         private const int WINEVENT_OUTOFCONTEXT = 0;
         private const int SW_SHOWNOACTIVATE = 4;
@@ -57,12 +63,10 @@ namespace DeskBoxes
         private static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
 
         private static List<Form> _forms = new List<Form>();
-        // 某些窗口 SetWindowPos(HWND_TOPMOST) 会被系统静默拒绝（返回 True 但 exstyle 里没有 TOPMOST 位）。
-        // 记下来不再重试，避免每 150ms 空转刷日志。
-        private static List<Form> _noTopmost = new List<Form>();
         private static Timer _timer;
         private static WinEventDelegate _proc;      // 必须留引用
         private static bool _busy;
+        private static bool _lastDesktop;
         private static bool _hooked;
 
         /// <summary>注册一个要守护的窗口，注册即生效。</summary>
@@ -71,6 +75,7 @@ namespace DeskBoxes
             if (form == null) return;
             if (_forms.Contains(form)) return;
             _forms.Add(form);
+            GuardLog("register " + form.Text + " hwnd=" + form.Handle);
 
             if (_timer == null)
             {
@@ -108,7 +113,10 @@ namespace DeskBoxes
             if (h == IntPtr.Zero) return;
             try
             {
-                SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                // 只有「桌面在前台」时其它盒子才是 TOPMOST，这时才需要把自己也升上去；
+                // 平常的前台是别的应用，强行 TOPMOST 会让面板压在别人上面。
+                if (IsDesktopClass(ClassOf(GetForegroundWindow())))
+                    SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                 SetWindowPos(h, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             }
             catch { }
@@ -118,13 +126,43 @@ namespace DeskBoxes
         /// 把弹出菜单抬到 TOPMOST 层。
         /// 盒子本身在桌面前台时是 TOPMOST，普通菜单会被压在盒子下面（点设置却看不到菜单）。
         /// </summary>
-        public static void RaiseMenu(IntPtr h)
+        /// <summary>
+        /// 统一的 z-order 调整。
+        /// 注意：必须带上窗口当前的真实尺寸、**不能加 SWP_NOSIZE** ——
+        /// 实测快捷键盒子带 SWP_NOSIZE 时 SetWindowPos 返回 True 但 TOPMOST 位不生效
+        /// （Win+D 后就浮不上来），去掉 NOSIZE 立刻正常。
+        /// </summary>
+        private static bool ZOrder(IntPtr h, IntPtr after, bool show)
         {
-            if (h == IntPtr.Zero) return;
-            try { SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); }
-            catch { }
+            if (h == IntPtr.Zero) return false;
+            try
+            {
+                RECT rc;
+                if (!GetWindowRect(h, out rc)) return false;
+                int cw = rc.Right - rc.Left, ch = rc.Bottom - rc.Top;
+                if (cw <= 0 || ch <= 0) return false;
+                uint flags = SWP_NOMOVE | SWP_NOACTIVATE;
+                if (show) flags |= SWP_SHOWWINDOW;
+                return SetWindowPos(h, after, 0, 0, cw, ch, flags);
+            }
+            catch { return false; }
         }
 
+        public static void RaiseMenu(IntPtr h)
+        {
+            ZOrder(h, HWND_TOPMOST, false);
+        }
+
+
+        private static void GuardLog(string msg)
+        {
+            try
+            {
+                System.IO.File.AppendAllText(System.IO.Path.Combine(ConfigStore.Dir, "guard.log"),
+                    DateTime.Now.ToString("HH:mm:ss.fff") + "  " + msg + Environment.NewLine);
+            }
+            catch { }
+        }
 
         private static string ClassOf(IntPtr h)
         {
@@ -149,13 +187,28 @@ namespace DeskBoxes
                 _busy = true;
 
                 bool desktopForeground = IsDesktopClass(ClassOf(GetForegroundWindow()));
+                if (desktopForeground != _lastDesktop)
+                {
+                    _lastDesktop = desktopForeground;
+                    string fg = ClassOf(GetForegroundWindow());
+                    StringBuilder sb = new StringBuilder("desktop=" + desktopForeground + " fg=" + fg);
+                    for (int k = 0; k < _forms.Count; k++)
+                    {
+                        Form g = _forms[k];
+                        if (g == null) continue;
+                        sb.Append(" | ").Append(g.Text)
+                          .Append(" top=").Append((GetWindowLongW(g.Handle, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0)
+                          .Append(" vis=").Append(IsWindowVisible(g.Handle))
+                          .Append(" min=").Append(g.WindowState == FormWindowState.Minimized);
+                    }
+                    GuardLog(sb.ToString());
+                }
 
                 Form[] arr = _forms.ToArray();
                 for (int i = 0; i < arr.Length; i++)
                 {
                     Form f = arr[i];
                     if (f == null || f.IsDisposed || !f.IsHandleCreated) continue;
-                    if (_noTopmost.Contains(f)) continue;   // 已知拿不到 TOPMOST，别空转
 
                     try
                     {
@@ -171,17 +224,16 @@ namespace DeskBoxes
                         {
                             if (!topmost)
                             {
-                                // 先按标准方式置顶；个别窗口会被系统静默忽略
-                                // （返回 True 但 exstyle 里没有 TOPMOST 位），此时记下来不再重试。
-                                SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0,
-                                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-                                if ((GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0)
-                                    _noTopmost.Add(f);
+                                // 直接置顶；对已置顶窗口是幂等的，不必靠「读完 exstyle 再判断」
+                                // ——那种写法会读到尚未生效的值，把能置顶的窗口误判成拒绝。
+                                bool ok = ZOrder(h, HWND_TOPMOST, false);
+                                if (f.Text == "快捷键盒子")
+                                    GuardLog("try-top ok=" + ok + " err=" + Marshal.GetLastWin32Error()
+                                        + " hwnd=" + h + " ex=" + (GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_TOPMOST));
                             }
                             if (!visible)
                             {
-                                SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0,
-                                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                                ZOrder(h, HWND_TOPMOST, true);
                             }
                         }
                         else if (topmost || !visible)
@@ -190,8 +242,7 @@ namespace DeskBoxes
                             // 之前写成「手动清 exstyle 的 TOPMOST 位 + SWP_NOZORDER」，
                             // 结果标记位没了、窗口却还留在 TOPMOST 层 ——
                             // 下一帧检查认为已经落回，从此再也不处理，盒子就一直浮在微信上面。
-                            SetWindowPos(h, HWND_NOTOPMOST, 0, 0, 0, 0,
-                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                            ZOrder(h, HWND_NOTOPMOST, false);
                         }
                     }
                     catch { }
