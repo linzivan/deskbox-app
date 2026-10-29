@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -565,11 +565,15 @@ namespace DeskBoxes
                 }
                 Console.WriteLine((ok ? "[PASS] " : "[FAIL] ") + names[i] + "  " + f.Width + "x" + f.Height);
                 if (!ok) fail++;
+                Application.DoEvents();          // 让异步取数回调在窗体还活着时执行完
+                System.Threading.Thread.Sleep(120);
+                Application.DoEvents();
                 try { f.Dispose(); } catch { }
             }
 
             Console.WriteLine(fail == 0 ? "SELFTEST OK (" + forms.Length + " boxes)" : "SELFTEST FAILED: " + fail);
             Console.Out.Flush();
+            Environment.Exit(fail);      // 直接结束，避开 WinForms 关停阶段的异步回调
             return fail;
         }
 
