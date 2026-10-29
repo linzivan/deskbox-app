@@ -21,6 +21,7 @@ namespace DeskBoxes
         private TrayNotify _tray;
         private Icon _trayIcon;
         private readonly System.Windows.Forms.Timer _saveTimer;
+        private System.Windows.Forms.Timer _testQuitTimer;
         private bool _dirty;
 
         public TrayContext()
@@ -473,6 +474,21 @@ namespace DeskBoxes
             return SystemIcons.Application;
         }
 
+        /// <summary>测试用：N 秒后走正常退出流程（含还原桌面）。</summary>
+        public void ScheduleQuit(int seconds)
+        {
+            _testQuitTimer = new System.Windows.Forms.Timer();
+            _testQuitTimer.Interval = Math.Max(1, seconds) * 1000;
+            _testQuitTimer.Tick += delegate
+            {
+                _testQuitTimer.Stop();
+                _testQuitTimer.Dispose();
+                _testQuitTimer = null;
+                Quit();
+            };
+            _testQuitTimer.Start();
+        }
+
         private void Quit()
         {
             // 盒子不在运行时桌面必须保持原样：退出前把所有收纳的快捷方式还原回桌面。
@@ -492,7 +508,7 @@ namespace DeskBoxes
         private static extern bool SetProcessDPIAware();
 
         [STAThread]
-        static void Main()
+        static void Main(string[] args)
         {
             bool created;
             using (Mutex mutex = new Mutex(true, "DeskBoxes_SingleInstance_v2", out created))
@@ -519,7 +535,15 @@ namespace DeskBoxes
                     PanelForm.LogError("UnhandledException", e.ExceptionObject as Exception);
                 };
 
-                Application.Run(new TrayContext());
+                TrayContext ctx = new TrayContext();
+
+                // 测试钩子：--quit-after=N 表示 N 秒后走正常退出流程（会还原桌面图标）
+                int quitAfter = 0;
+                for (int i = 0; i < args.Length; i++)
+                    if (args[i].StartsWith("--quit-after=")) int.TryParse(args[i].Substring(13), out quitAfter);
+                if (quitAfter > 0) ctx.ScheduleQuit(quitAfter);
+
+                Application.Run(ctx);
                 GC.KeepAlive(mutex);
             }
         }
