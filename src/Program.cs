@@ -532,6 +532,47 @@ namespace DeskBoxes
         [DllImport("user32.dll")]
         private static extern bool SetProcessDPIAware();
 
+        /// <summary>
+        /// 自检：逐个创建每个盒子并断言窗口句柄真的建出来了。
+        /// 这是回归护栏 —— 任何一次重写/移植漏掉一个盒子，这里都会 FAIL 并返回非 0 退出码。
+        /// </summary>
+        static int SelfTest()
+        {
+            AppState st = ConfigStore.Load();
+            Form[] forms =
+            {
+                new PanelForm(st),
+                new BalanceForm(st),
+                new ShortcutForm(st),
+                new HermesBox(st)
+            };
+            string[] names = { "面板 桌面盒子", "余额盒子", "快捷键盒子", "Hermes 盒子" };
+
+            int fail = 0;
+            for (int i = 0; i < forms.Length; i++)
+            {
+                Form f = forms[i];
+                bool ok;
+                try
+                {
+                    IntPtr h = f.Handle;                    // 强制创建窗口句柄
+                    ok = h != IntPtr.Zero && f.Width > 0 && f.Height > 0;
+                }
+                catch (Exception ex)
+                {
+                    ok = false;
+                    PanelForm.LogError("SelfTest:" + names[i], ex);
+                }
+                Console.WriteLine((ok ? "[PASS] " : "[FAIL] ") + names[i] + "  " + f.Width + "x" + f.Height);
+                if (!ok) fail++;
+                try { f.Dispose(); } catch { }
+            }
+
+            Console.WriteLine(fail == 0 ? "SELFTEST OK (" + forms.Length + " boxes)" : "SELFTEST FAILED: " + fail);
+            Console.Out.Flush();
+            return fail;
+        }
+
         [STAThread]
         static void Main(string[] args)
         {
@@ -561,6 +602,14 @@ namespace DeskBoxes
                 };
 
                 TrayContext ctx = new TrayContext();
+
+                // 测试钩子：--selftest 逐个创建所有盒子并断言窗口真的建出来了。
+                // 目的：重写/移植时漏掉某个盒子（比如曾经的 Hermes 盒子），这里会直接 FAIL。
+                if (Array.IndexOf(args, "--selftest") >= 0)
+                {
+                    Environment.ExitCode = SelfTest();
+                    return;
+                }
 
                 // 测试钩子：--quit-after=N 表示 N 秒后走正常退出流程（会还原桌面图标）
                 int quitAfter = 0;
