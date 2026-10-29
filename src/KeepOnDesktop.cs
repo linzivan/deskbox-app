@@ -226,10 +226,7 @@ namespace DeskBoxes
                             {
                                 // 直接置顶；对已置顶窗口是幂等的，不必靠「读完 exstyle 再判断」
                                 // ——那种写法会读到尚未生效的值，把能置顶的窗口误判成拒绝。
-                                bool ok = ZOrder(h, HWND_TOPMOST, false);
-                                if (f.Text == "快捷键盒子")
-                                    GuardLog("try-top ok=" + ok + " err=" + Marshal.GetLastWin32Error()
-                                        + " hwnd=" + h + " ex=" + (GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_TOPMOST));
+                                ZOrder(h, HWND_TOPMOST, false);
                             }
                             if (!visible)
                             {
