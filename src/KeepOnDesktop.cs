@@ -214,11 +214,15 @@ namespace DeskBoxes
                     {
                         IntPtr h = f.Handle;
 
+                        // 用户主动隐藏的盒子（托盘 / 盒子右键「隐藏这个盒子」）不要碰：
+                        // 既不要置顶，更不要在这里把它重新显示出来 —— 否则一开设置菜单
+                        // （桌面回到前台）隐藏的盒子就自己弹回来了。
+                        if (!IsWindowVisible(h)) continue;
+
                         if (f.WindowState == FormWindowState.Minimized)
                             f.WindowState = FormWindowState.Normal;
 
                         bool topmost = (GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
-                        bool visible = IsWindowVisible(h);
 
                         if (desktopForeground)
                         {
@@ -228,17 +232,10 @@ namespace DeskBoxes
                                 // ——那种写法会读到尚未生效的值，把能置顶的窗口误判成拒绝。
                                 ZOrder(h, HWND_TOPMOST, false);
                             }
-                            if (!visible)
-                            {
-                                ZOrder(h, HWND_TOPMOST, true);
-                            }
                         }
-                        else if (topmost || !visible)
+                        else if (topmost)
                         {
                             // 落回必须让 SetWindowPos 自己处理整个 Z 序迁移。
-                            // 之前写成「手动清 exstyle 的 TOPMOST 位 + SWP_NOZORDER」，
-                            // 结果标记位没了、窗口却还留在 TOPMOST 层 ——
-                            // 下一帧检查认为已经落回，从此再也不处理，盒子就一直浮在微信上面。
                             ZOrder(h, HWND_NOTOPMOST, false);
                         }
                     }
