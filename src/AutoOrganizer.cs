@@ -438,5 +438,65 @@ namespace DeskBoxes
                 if (File.Exists(l.Records[i].To)) n++;
             return n;
         }
+
+        /// <summary>
+        /// 启动时把分区条目重新接回仓库：程序退出时已把文件还原到桌面，
+        /// 这里按条目里记录的仓库路径，从用户/公共桌面把同名文件移回原位，
+        /// 并补写移动日志（供下次退出再还原）。找不到源文件的条目直接移除。
+        /// 保留原有布局，不按规则重排。
+        /// </summary>
+        public static int Relink(List<SectionDef> sections, out int removed)
+        {
+            removed = 0;
+            int relinked = 0;
+            if (sections == null) return 0;
+
+            MoveLog log = LoadLog();
+            string vault = VaultDir;
+            List<string> desktops = DesktopDirs;
+
+            for (int s = 0; s < sections.Count; s++)
+            {
+                SectionDef sec = sections[s];
+                if (sec == null || sec.Items == null) continue;
+
+                for (int i = sec.Items.Count - 1; i >= 0; i--)   // 倒序，便于安全移除
+                {
+                    string vp = sec.Items[i].Path;
+                    if (string.IsNullOrEmpty(vp)) continue;
+                    if (!vp.StartsWith(vault, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (File.Exists(vp)) continue;                // 还在仓库，无需接回
+
+                    string name = Path.GetFileName(vp);
+                    string src = null;
+                    for (int d = 0; d < desktops.Count; d++)
+                    {
+                        string cand = Path.Combine(desktops[d], name);
+                        if (File.Exists(cand)) { src = cand; break; }
+                    }
+
+                    if (src == null) { sec.Items.RemoveAt(i); removed++; continue; }
+
+                    try
+                    {
+                        string dir = Path.GetDirectoryName(vp);
+                        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                        File.Move(src, vp);
+
+                        MoveRecord r = new MoveRecord();
+                        r.From = src;
+                        r.To = vp;
+                        r.Section = sec.Name;
+                        r.When = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                        log.Records.Add(r);
+                        relinked++;
+                    }
+                    catch { sec.Items.RemoveAt(i); removed++; }
+                }
+            }
+
+            SaveLog(log);
+            return relinked;
+        }
     }
 }

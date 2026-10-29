@@ -28,6 +28,14 @@ namespace DeskBoxes
             _st = ConfigStore.Load();
             if (ConfigStore.LastLoadMigrated) { try { ConfigStore.Save(_st); } catch { } }
 
+            // 上次退出已把快捷方式还原到桌面；启动时按原布局把它们接回仓库。
+            try
+            {
+                int removed;
+                if (AutoOrganizer.Relink(_st.Sections, out removed) > 0 || removed > 0) _dirty = true;
+            }
+            catch { }
+
             _saveTimer = new System.Windows.Forms.Timer();
             _saveTimer.Interval = 600;
             _saveTimer.Tick += delegate
@@ -41,6 +49,12 @@ namespace DeskBoxes
             BuildTray();
             BuildPanel();
             BuildWidgets();
+
+            // 关机/注销时也把快捷方式还原回桌面，避免下次开机桌面空空如也。
+            Microsoft.Win32.SystemEvents.SessionEnding += delegate
+            {
+                try { int skipped; AutoOrganizer.Restore(out skipped); } catch { }
+            };
 
             if (_st.HideAll) _panel.Hide();
         }
@@ -461,6 +475,8 @@ namespace DeskBoxes
 
         private void Quit()
         {
+            // 盒子不在运行时桌面必须保持原样：退出前把所有收纳的快捷方式还原回桌面。
+            try { int skipped; AutoOrganizer.Restore(out skipped); } catch { }
             ConfigStore.Save(_st);
             if (_panel != null) { try { _panel.Hide(); _panel.Dispose(); } catch { } }
             if (_balance != null) { try { _balance.Hide(); _balance.Dispose(); } catch { } }
