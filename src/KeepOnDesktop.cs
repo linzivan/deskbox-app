@@ -47,6 +47,14 @@ namespace DeskBoxes
         [DllImport("user32.dll")]
         private static extern bool GetWindowRect(IntPtr hWnd, out RECT rc);
 
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+        [DllImport("kernel32.dll")]
+        private static extern uint GetCurrentProcessId();
+
+        /// <summary>刚回到桌面时的连续重刷帧数（桌面激活后图标层会被抬到最上面）。</summary>
+        private static int _burst;
+
         private const int EVENT_SYSTEM_FOREGROUND = 3;
         private const int WINEVENT_OUTOFCONTEXT = 0;
         private const int SW_SHOWNOACTIVATE = 4;
@@ -202,7 +210,14 @@ namespace DeskBoxes
                           .Append(" min=").Append(g.WindowState == FormWindowState.Minimized);
                     }
                     GuardLog(sb.ToString());
+
+                    // 刚回到桌面：后面几帧强制重新置顶，压过刚被抬上来的桌面图标层
+                    _burst = desktopForeground ? 10 : 0;
                 }
+
+                uint fgPid;
+                GetWindowThreadProcessId(GetForegroundWindow(), out fgPid);
+                bool ownForeground = fgPid == GetCurrentProcessId();
 
                 Form[] arr = _forms.ToArray();
                 for (int i = 0; i < arr.Length; i++)
@@ -226,21 +241,26 @@ namespace DeskBoxes
 
                         if (desktopForeground)
                         {
-                            if (!topmost)
+                            // burst 期间即使已经置顶也要重刷：桌面激活后图标层会被抬到
+                            // TOPMOST 层最上面，把我们压在底下（"点了桌面盒子就没了"）。
+                            if (!topmost || _burst > 0)
                             {
                                 // 直接置顶；对已置顶窗口是幂等的，不必靠「读完 exstyle 再判断」
                                 // ——那种写法会读到尚未生效的值，把能置顶的窗口误判成拒绝。
                                 ZOrder(h, HWND_TOPMOST, false);
                             }
                         }
-                        else if (topmost)
+                        else if (topmost && !ownForeground)
                         {
+                            // 前台是我们自己的窗口（点盒子、弹菜单）时先不动层级，
+                            // 否则点一下盒子就全体降级，再回桌面又要重新抢一次置顶。
                             // 落回必须让 SetWindowPos 自己处理整个 Z 序迁移。
                             ZOrder(h, HWND_NOTOPMOST, false);
                         }
                     }
                     catch { }
                 }
+                if (_burst > 0) _burst--;
             }
             catch { }
             finally { _busy = false; }
