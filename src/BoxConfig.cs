@@ -104,30 +104,86 @@ namespace DeskBoxes
         /// <summary>每个应用被点开的次数，用来把常用的排到前面。</summary>
         [DataMember(Name = "clicks")] public List<ClickRec> Clicks = new List<ClickRec>();
 
-        public int ClickOf(string path)
+        /// <summary>指数衰减半衰期（天）。30 天前的使用大约还剩 50%。</summary>
+        public const double HalfLifeDays = 30.0;
+
+        public static long NowUnix()
         {
-            if (Clicks == null || string.IsNullOrEmpty(path)) return 0;
-            for (int i = 0; i < Clicks.Count; i++)
-                if (string.Equals(Clicks[i].Path, path, StringComparison.OrdinalIgnoreCase)) return Clicks[i].N;
-            return 0;
+            return (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
         }
 
+        private static double DaysSince(long unix)
+        {
+            if (unix <= 0) return 0.0;
+            long now = NowUnix();
+            if (now <= unix) return 0.0;
+            return (now - unix) / 86400.0;
+        }
+
+        private ClickRec Find(string path)
+        {
+            if (Clicks == null || string.IsNullOrEmpty(path)) return null;
+            for (int i = 0; i < Clicks.Count; i++)
+                if (string.Equals(Clicks[i].Path, path, StringComparison.OrdinalIgnoreCase)) return Clicks[i];
+            return null;
+        }
+
+        /// <summary>旧接口：累计次数（保留兼容，不再用于排序）。</summary>
+        public int ClickOf(string path)
+        {
+            ClickRec r = Find(path);
+            return r == null ? 0 : r.N;
+        }
+
+        /// <summary>衰减后的原始分（未分桶）：衰减分 × 0.5^(距上次使用天数/半衰期)。</summary>
+        public double RawScoreOf(string path)
+        {
+            ClickRec r = Find(path);
+            if (r == null) return 0.0;
+            return r.Score * Math.Pow(0.5, DaysSince(r.LastUsed) / HalfLifeDays);
+        }
+
+        /// <summary>
+        /// 排序档位：按 log(1+分)/log(1.15) 分档（约 15% 一档）。
+        /// 同档内保持原顺序，只有明显更高（约 15% 以上）才升档 —— 滞回，避免来回换位。
+        /// </summary>
+        public int RankOf(string path)
+        {
+            double s = RawScoreOf(path);
+            if (s <= 0.0) return 0;
+            return (int)Math.Floor(Math.Log(s + 1.0) / Math.Log(1.15));
+        }
+
+        /// <summary>记一次点击：先把旧分衰减到当前，再 +1；同时更新 last 与旧计数。</summary>
         public void BumpClick(string path)
         {
             if (string.IsNullOrEmpty(path)) return;
             if (Clicks == null) Clicks = new List<ClickRec>();
+            ClickRec r = Find(path);
+            if (r == null)
+            {
+                r = new ClickRec();
+                r.Path = path;
+                Clicks.Add(r);
+            }
+            r.Score = r.Score * Math.Pow(0.5, DaysSince(r.LastUsed) / HalfLifeDays) + 1.0;
+            r.LastUsed = NowUnix();
+            r.N = r.N + 1;
+        }
+
+        /// <summary>老数据迁移：旧版只有 n，没有 score/last；用 n 当初始分、last 记为今天。返回是否改动过。</summary>
+        public bool MigrateClicks()
+        {
+            if (Clicks == null) return false;
+            bool changed = false;
+            long now = NowUnix();
             for (int i = 0; i < Clicks.Count; i++)
             {
-                if (string.Equals(Clicks[i].Path, path, StringComparison.OrdinalIgnoreCase))
-                {
-                    Clicks[i].N++;
-                    return;
-                }
+                ClickRec r = Clicks[i];
+                if (r.Score <= 0.0 && r.N > 0) { r.Score = r.N; r.LastUsed = now; changed = true; }
+                else if (r.LastUsed <= 0) { r.LastUsed = now; changed = true; }
             }
-            ClickRec r = new ClickRec();
-            r.Path = path;
-            r.N = 1;
-            Clicks.Add(r);
+            return changed;
         }
     }
 
@@ -136,11 +192,16 @@ namespace DeskBoxes
     public class ClickRec
     {
         [DataMember(Name = "path")] public string Path = "";
-        [DataMember(Name = "n")] public int N = 0;
+        [DataMember(Name = "n")] public int N = 0;              // 旧字段：累计次数（保留，仅统计/迁移）
+        [DataMember(Name = "score")] public double Score = 0;   // 衰减分：每次点击先衰减到当前再 +1
+        [DataMember(Name = "last")] public long LastUsed = 0;   // 上次点击时间（Unix 秒）
     }
 
     public static class ConfigStore
     {
+        /// <summary>上一次 Load 是否做过老数据迁移（Program 据此立即落盘，避免每次启动重置 last）。</summary>
+        public static bool LastLoadMigrated = false;
+
         public static string Dir
         {
             get
@@ -174,6 +235,7 @@ namespace DeskBoxes
                     if (string.IsNullOrEmpty(st.PanelColor)) st.PanelColor = "#16202C";
                     if (st.PanelAlpha < 40) st.PanelAlpha = 210;
                     if (st.Clicks == null) st.Clicks = new List<ClickRec>();
+                    LastLoadMigrated = st.MigrateClicks();
                     if (st.BalW < 120) st.BalW = 248;
                     if (st.BalH < 80) st.BalH = 148;
                     if (st.KeyW < 150) st.KeyW = 320;

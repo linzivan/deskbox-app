@@ -336,21 +336,26 @@ namespace DeskBoxes
             return _st.LooseItems == null ? 0 : _st.LooseItems.Count;
         }
 
-        /// <summary>按点击频次降序排好的显示列表（同频次保持原顺序）。不改动 d.Items 本身。</summary>
+        /// <summary>
+        /// 按「有效分」降序排好的显示列表：衰减分 × 0.5^(距上次使用天数/半衰期)，
+        /// 已按 0.5 分桶做滞回；同分保持原顺序（稳定）。不改动 d.Items 本身。
+        /// </summary>
         private List<BoxItem> ViewItems(SectionDef d)
         {
             List<BoxItem> result = new List<BoxItem>();
             if (d == null || d.Items == null || d.Items.Count == 0) return result;
 
+            int n = d.Items.Count;
+            int[] rank = new int[n];
+            for (int i = 0; i < n; i++) rank[i] = _st.RankOf(d.Items[i].Path);
+
             List<int> order = new List<int>();
-            for (int i = 0; i < d.Items.Count; i++) order.Add(i);
+            for (int i = 0; i < n; i++) order.Add(i);
 
             order.Sort(delegate(int a, int b)
             {
-                int ca = _st.ClickOf(d.Items[a].Path);
-                int cb = _st.ClickOf(d.Items[b].Path);
-                if (ca != cb) return cb.CompareTo(ca);   // 点得多的在前
-                return a.CompareTo(b);                   // 同频次按原序，保证稳定
+                if (rank[a] != rank[b]) return rank[b].CompareTo(rank[a]); // 档位高的在前
+                return a.CompareTo(b);                                     // 同档按原序，稳定
             });
 
             for (int i = 0; i < order.Count; i++) result.Add(d.Items[order[i]]);

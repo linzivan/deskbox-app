@@ -26,6 +26,7 @@ namespace DeskBoxes
         public TrayContext()
         {
             _st = ConfigStore.Load();
+            if (ConfigStore.LastLoadMigrated) { try { ConfigStore.Save(_st); } catch { } }
 
             _saveTimer = new System.Windows.Forms.Timer();
             _saveTimer.Interval = 600;
