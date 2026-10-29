@@ -14,6 +14,7 @@ echo Compiling ...
   src\BoxConfig.cs src\IconLoader.cs src\AutoOrganizer.cs src\OrganizeForm.cs ^
 
   src\PanelForm.cs src\BalanceData.cs src\BalanceForm.cs src\ShortcutForm.cs ^
+  src\HermesData.cs src\HermesBox.cs ^
 
   src\TrayNotify.cs src\KeepOnDesktop.cs src\Program.cs
 

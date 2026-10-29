@@ -91,6 +91,17 @@ namespace DeskBoxes
         [DataMember(Name = "balColor")] public string BalColor = "#1E1E2E";
         [DataMember(Name = "balRefreshMin")] public int BalRefreshMin = 5;
 
+        // ---- Hermes 盒子（显示最近会话与执行状态）----
+        [DataMember(Name = "hermesVisible")] public bool HermesVisible = true;
+        [DataMember(Name = "hermesX")] public int HermesX = 1500;
+        [DataMember(Name = "hermesY")] public int HermesY = 480;
+        [DataMember(Name = "hermesW")] public int HermesW = 300;
+        [DataMember(Name = "hermesH")] public int HermesH = 196;
+        [DataMember(Name = "hermesFont")] public int HermesFont = 11;
+        [DataMember(Name = "hermesAlpha")] public int HermesAlpha = 190;
+        [DataMember(Name = "hermesColor")] public string HermesColor = "#1E1E2E";
+        [DataMember(Name = "hermesRefreshMin")] public int HermesRefreshMin = 2;
+
         // ---- 快捷键盒子 ----
         [DataMember(Name = "keyVisible")] public bool KeyVisible = true;
         [DataMember(Name = "keyX")] public int KeyX = 40;
@@ -256,6 +267,20 @@ namespace DeskBoxes
                         st.KeyX = 40; st.KeyY = 160;
                         st.KeyFont = 11; st.KeyAlpha = 200;
                     }
+                    // Hermes 盒子同理：老配置没有 hermes* 字段，读出来全是 0/false
+                    if (string.IsNullOrEmpty(st.HermesColor))
+                    {
+                        st.HermesColor = "#1E1E2E";
+                        st.HermesVisible = true;
+                        st.HermesX = 1500; st.HermesY = 480;
+                        st.HermesW = 300; st.HermesH = 196;
+                        st.HermesFont = 11; st.HermesAlpha = 190;
+                    }
+                    if (st.HermesW < 200) st.HermesW = 300;
+                    if (st.HermesH < 120) st.HermesH = 196;
+                    if (st.HermesFont < 7) st.HermesFont = 11;
+                    if (st.HermesAlpha < 60) st.HermesAlpha = 190;
+                    if (st.HermesRefreshMin < 1) st.HermesRefreshMin = 2;
                     if (st.BalFont < 14) st.BalFont = 24;
                     if (st.BalAlpha < 60) st.BalAlpha = 200;
                     if (st.KeyFont < 7) st.KeyFont = 11;

@@ -17,6 +17,7 @@ namespace DeskBoxes
         private AppState _st;
         private PanelForm _panel;
         private BalanceForm _balance;
+        private HermesBox _hermes;
         private ShortcutForm _shortcuts;
         private TrayNotify _tray;
         private Icon _trayIcon;
@@ -80,6 +81,14 @@ namespace DeskBoxes
                 if (_st.BalVisible) _balance.Show();
             }
             catch (Exception ex) { PanelForm.LogError("BuildBalance", ex); }
+
+            try
+            {
+                _hermes = new HermesBox(_st);
+                _hermes.Changed += delegate { _dirty = true; };
+                if (_st.HermesVisible) _hermes.Show();
+            }
+            catch (Exception ex) { PanelForm.LogError("BuildHermes", ex); }
 
             try
             {
@@ -160,6 +169,21 @@ namespace DeskBoxes
                 RefreshTrayMenu();
             };
             m.Items.Add(keyItem);
+
+            ToolStripMenuItem hermesItem = new ToolStripMenuItem("Hermes 盒子");
+            hermesItem.Checked = _st.HermesVisible;
+            hermesItem.Click += delegate
+            {
+                _st.HermesVisible = !_st.HermesVisible;
+                if (_hermes != null)
+                {
+                    if (_st.HermesVisible) _hermes.Fetch();
+                    else _hermes.Hide();
+                }
+                _dirty = true;
+                RefreshTrayMenu();
+            };
+            m.Items.Add(hermesItem);
             m.Items.Add(new ToolStripSeparator());
 
             ToolStripMenuItem secs = new ToolStripMenuItem("分区（" + _st.Sections.Count + "）");
@@ -496,6 +520,7 @@ namespace DeskBoxes
             ConfigStore.Save(_st);
             if (_panel != null) { try { _panel.Hide(); _panel.Dispose(); } catch { } }
             if (_balance != null) { try { _balance.Hide(); _balance.Dispose(); } catch { } }
+            if (_hermes != null) { try { _hermes.Hide(); _hermes.Dispose(); } catch { } }
             if (_shortcuts != null) { try { _shortcuts.Hide(); _shortcuts.Dispose(); } catch { } }
             if (_tray != null) { _tray.Dispose(); }
             ExitThread();
