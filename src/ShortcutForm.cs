@@ -97,7 +97,7 @@ namespace DeskBoxes
             get
             {
                 CreateParams cp = base.CreateParams;
-                cp.ExStyle |= WS_EX_LAYERED | WS_EX_TOOLWINDOW;
+                cp.ExStyle |= WS_EX_LAYERED | WS_EX_TOOLWINDOW | 0x08000000;   // WS_EX_NOACTIVATE：点击不抢焦点
                 return cp;
             }
         }

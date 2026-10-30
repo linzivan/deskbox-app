@@ -64,6 +64,7 @@ namespace DeskBoxes
         private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
         private static readonly IntPtr HWND_TOP = IntPtr.Zero;
         private static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
+        private static readonly IntPtr HWND_BOTTOM = new IntPtr(1);
 
         private static List<Form> _forms = new List<Form>();
         private static Timer _timer;
@@ -171,6 +172,22 @@ namespace DeskBoxes
             if (wantTop) return isTop;
             if (wantNotTop) return !isTop;
             return true;
+        }
+
+        /// <summary>
+        /// 窗口显示后调用：新显示的窗口会被排到 z 序最上。
+        /// 桌面在前台时交给状态机（下一帧会置顶）；否则直接压到最底，避免短暂盖住应用。
+        /// </summary>
+        public static void BringToBottom(Form f)
+        {
+            if (f == null || f.IsDisposed || !f.IsHandleCreated) return;
+            try
+            {
+                if (!IsWindowVisible(f.Handle)) return;
+                if (IsDesktopClass(ClassOf(GetForegroundWindow()))) return;   // 桌面在前台：交给状态机置顶
+                SetWindowPos(f.Handle, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            }
+            catch { }
         }
 
         public static void RaiseMenu(IntPtr h)

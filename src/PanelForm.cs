@@ -221,9 +221,15 @@ namespace DeskBoxes
             get
             {
                 CreateParams cp = base.CreateParams;
-                cp.ExStyle |= WS_EX_LAYERED | WS_EX_TOOLWINDOW;
+                cp.ExStyle |= WS_EX_LAYERED | WS_EX_TOOLWINDOW | 0x08000000;   // WS_EX_NOACTIVATE：点击不抢焦点
                 return cp;
             }
+        }
+
+        protected override void OnVisibleChanged(EventArgs e)
+        {
+            base.OnVisibleChanged(e);
+            if (Visible) DeskGuard.BringToBottom(this);   // 新显示的窗口会被排到最上，压回底层
         }
 
         protected override void OnHandleCreated(EventArgs e)

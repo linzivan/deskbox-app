@@ -114,6 +114,12 @@ namespace DeskBoxes
             }
         }
 
+        protected override void OnVisibleChanged(EventArgs e)
+        {
+            base.OnVisibleChanged(e);
+            if (Visible) DeskGuard.BringToBottom(this);   // 新显示的窗口会被排到最上，压回底层
+        }
+
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
