@@ -52,6 +52,19 @@ namespace DeskBoxes
         /// <summary>刚回到桌面时的连续重刷帧数（桌面激活后图标层会被抬到最上面）。</summary>
         private static int _burst;
 
+        [DllImport("user32.dll")] private static extern IntPtr GetTopWindow(IntPtr h);
+        [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr h, uint cmd);
+        [DllImport("user32.dll")] private static extern int GetWindowTextLengthW(IntPtr h);
+        [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+        [DllImport("user32.dll")] private static extern bool SetWindowRgn(IntPtr h, IntPtr rgn, bool redraw);
+        [DllImport("gdi32.dll")] private static extern IntPtr CreateRectRgn(int l, int t, int r, int b);
+        [DllImport("gdi32.dll")] private static extern int CombineRgn(IntPtr dst, IntPtr a, IntPtr b, int mode);
+        [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr o);
+
+        private const uint GW_HWNDNEXT = 2;
+        private const int RGN_DIFF = 4;
+        private const int WS_EX_TOOLWINDOW = 0x00000080;
+
         private const int EVENT_SYSTEM_FOREGROUND = 3;
         private const int WINEVENT_OUTOFCONTEXT = 0;
         private const int SW_SHOWNOACTIVATE = 4;
@@ -212,6 +225,72 @@ namespace DeskBoxes
             catch { }
         }
 
+        /// <summary>
+        /// 让置顶的盒子给应用"让路"：把每个可见应用窗口的矩形从盒子窗口区域里挖掉。
+        ///
+        /// 为什么需要：桌面在前台时盒子必须置顶，否则会被桌面图标层 SysListView32 压住
+        /// （可见但点不到）。可一旦置顶，未最大化的文件浏览器就会被盒子盖住。
+        /// 挖洞后：应用所在矩形显示的是应用本身，其余区域仍是盒子 —— 视觉上等价于
+        /// "盒子在应用下面"，而盒子在桌面上依然可点。
+        /// </summary>
+        private static void ApplyCutout(Form f)
+        {
+            IntPtr h = f.Handle;
+            bool topmost = (GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+
+            RECT box;
+            if (!GetWindowRect(h, out box)) return;
+            int bw = box.Right - box.Left, bh = box.Bottom - box.Top;
+            if (bw <= 0 || bh <= 0) return;
+
+            StringBuilder sig = new StringBuilder();
+            IntPtr rgn = IntPtr.Zero;
+            if (topmost)
+            {
+                rgn = CreateRectRgn(0, 0, bw, bh);
+                uint me = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+
+                for (IntPtr wnd = GetTopWindow(IntPtr.Zero); wnd != IntPtr.Zero; wnd = GetWindow(wnd, GW_HWNDNEXT))
+                {
+                    if (wnd == h || !IsWindowVisible(wnd)) continue;
+                    uint pid; GetWindowThreadProcessId(wnd, out pid);
+                    if (pid == me) continue;                       // 我们自己的盒子
+                    string c = ClassOf(wnd);
+                    if (IsDesktopClass(c)) continue;               // 桌面/任务栏/IME
+                    if ((GetWindowLongW(wnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0) continue;
+                    if (GetWindowTextLengthW(wnd) == 0) continue;  // 无标题 = 辅助窗口
+
+                    RECT r;
+                    if (!GetWindowRect(wnd, out r)) continue;
+                    int l = Math.Max(r.Left, box.Left) - box.Left;
+                    int t = Math.Max(r.Top, box.Top) - box.Top;
+                    int rr = Math.Min(r.Right, box.Right) - box.Left;
+                    int bb = Math.Min(r.Bottom, box.Bottom) - box.Top;
+                    if (rr <= l || bb <= t) continue;              // 不相交
+
+                    IntPtr cut = CreateRectRgn(l, t, rr, bb);
+                    CombineRgn(rgn, rgn, cut, RGN_DIFF);
+                    DeleteObject(cut);
+                    sig.Append(l).Append(',').Append(t).Append(',').Append(rr).Append(',').Append(bb).Append(';');
+                }
+            }
+
+            string key = sig.ToString();
+            string old;
+            if (_cutSig.TryGetValue(h, out old) && old == key)
+            {
+                if (rgn != IntPtr.Zero) DeleteObject(rgn);
+                return;
+            }
+            _cutSig[h] = key;
+
+            if (topmost && key.Length > 0) SetWindowRgn(h, rgn, true);   // 系统接管区域所有权
+            else { if (rgn != IntPtr.Zero) DeleteObject(rgn); SetWindowRgn(h, IntPtr.Zero, true); }
+        }
+
+        private static readonly System.Collections.Generic.Dictionary<IntPtr, string> _cutSig =
+            new System.Collections.Generic.Dictionary<IntPtr, string>();
+
         public static void RaiseMenu(IntPtr h)
         {
             ZOrder(h, HWND_TOPMOST, false);
@@ -342,6 +421,7 @@ namespace DeskBoxes
                             PlaceBelowForeground(h);
                             Trace.Line("BELOW-FG " + f.Text + " above=" + ClassOf(GetForegroundWindow()));
                         }
+                        ApplyCutout(f);
                     }
                     catch (Exception ex) { GuardLog("ERR " + f.Text + " " + ex.GetType().Name + ": " + ex.Message); }
                 }
