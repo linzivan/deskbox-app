@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -7,15 +7,23 @@ using System.Windows.Forms;
 namespace DeskBoxes
 {
     /// <summary>
-    /// Win+D 保护：前台是桌面时升 TOPMOST，前台是普通程序时落回 NOTOPMOST。
-    /// 关键在于「只在状态需要变化时才调 SetWindowPos」——这既是节流，也保证一定能落回。
+    /// 盒子层级：坐在「桌面层」正上方 —— 桌面 &lt; 桌面图标 &lt; 盒子 &lt; 所有应用。
     ///
-    /// 本机实测结论（重要）：Win+D 既不会最小化也不会隐藏窗口，而是把桌面图标层
-    /// SysListView32 提到了所有普通顶层窗口之上，把盒子「压」下去。
-    /// 所以判据是「前台是否桌面」，动作是把盒子抬到同层最前（HWND_TOP）。
+    /// 这是桌面挂件类工具（桌面时钟、便签、壁纸引擎一类）的常规做法：
+    ///   · 不置顶（TOPMOST），所以永远不会盖住任何应用；
+    ///   · 也不压到最底（HWND_BOTTOM 会掉到壁纸下面，看得见却点不到）；
+    ///   · 而是把自己插在**桌面承载窗口（Progman）的正上方** —— 这个位置天然满足
+    ///     "在桌面之上、在所有应用之下"，点桌面/点应用都不会改变它。
+    ///   · 盒子统一 WS_EX_NOACTIVATE：点击不激活，系统不会把它提到前台应用之上。
     ///
-    /// 三个盒子共用这一个协调器：同一个定时器、同一帧判断、同一帧处理，
-    /// 避免各自 150ms 定时器相位不同导致某个盒子晚一拍才浮上来。
+    /// 唯一需要修正的时机：Win+D（显示桌面）会把桌面窗口抬到普通窗口层的最上面，
+    /// 这时把盒子重新归位到 Progman 正上方即可（前台变化 + 1 秒巡检）。
+    ///
+    /// 已废弃（都试过，均不可行，别捡回来）：
+    ///   · TOPMOST/NOTOPMOST 状态机：会盖住应用，且切换时闪；
+    ///   · 常驻 HWND_BOTTOM：落到壁纸下面，可见但点不到；
+    ///   · 桌面子窗口 SetParent：分层子窗口不支持 UpdateLayeredWindow，画面空白；
+    ///   · 置顶 + 按应用矩形挖洞：点桌面时盒子被切掉，体验很差。
     /// </summary>
     public static class DeskGuard
     {
@@ -23,91 +31,53 @@ namespace DeskBoxes
             int idObject, int idChild, int thread, int time);
 
         [DllImport("user32.dll")]
-        private static extern IntPtr SetWinEventHook(int evMin, int evMax, IntPtr hmod,
-            WinEventDelegate proc, int pid, int tid, int flags);
-        [DllImport("user32.dll")]
-        private static extern IntPtr GetForegroundWindow();
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-        private static extern int GetWindowTextW(IntPtr hWnd, StringBuilder buf, int n);
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-        private static extern int GetClassName(IntPtr hWnd, StringBuilder buf, int n);
-        [DllImport("user32.dll")]
-        private static extern bool ShowWindow(IntPtr hWnd, int cmd);
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
         [DllImport("user32.dll")]
         private static extern bool IsWindowVisible(IntPtr hWnd);
         [DllImport("user32.dll")]
-        private static extern int GetWindowLongW(IntPtr hWnd, int index);
+        private static extern IntPtr GetWindow(IntPtr hWnd, uint cmd);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr FindWindowW(string cls, string title);
         [DllImport("user32.dll")]
-        private static extern int SetWindowLongW(IntPtr hWnd, int index, int newLong);
-        [DllImport("user32.dll")]
-        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr after,
-            int x, int y, int cx, int cy, uint flags);
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct RECT { public int Left, Top, Right, Bottom; }
-
-        [DllImport("user32.dll")]
-        private static extern bool GetWindowRect(IntPtr hWnd, out RECT rc);
-
-        /// <summary>刚回到桌面时的连续重刷帧数（桌面激活后图标层会被抬到最上面）。</summary>
-        private static int _burst;
-
-        [DllImport("user32.dll")] private static extern IntPtr GetTopWindow(IntPtr h);
-        [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr h, uint cmd);
-        [DllImport("user32.dll")] private static extern int GetWindowTextLengthW(IntPtr h);
-        [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
-        [DllImport("user32.dll")] private static extern bool SetWindowRgn(IntPtr h, IntPtr rgn, bool redraw);
-        [DllImport("gdi32.dll")] private static extern IntPtr CreateRectRgn(int l, int t, int r, int b);
-        [DllImport("gdi32.dll")] private static extern int CombineRgn(IntPtr dst, IntPtr a, IntPtr b, int mode);
-        [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr o);
-
-        private const uint GW_HWNDNEXT = 2;
-        private const int RGN_DIFF = 4;
-        private const int WS_EX_TOOLWINDOW = 0x00000080;
+        private static extern IntPtr SetWinEventHook(int evMin, int evMax, IntPtr hmod,
+            WinEventDelegate proc, int pid, int tid, int flags);
 
         private const int EVENT_SYSTEM_FOREGROUND = 3;
         private const int WINEVENT_OUTOFCONTEXT = 0;
-        private const int SW_SHOWNOACTIVATE = 4;
-        private const int GWL_EXSTYLE = -20;
-        private const int WS_EX_TOPMOST = 0x00000008;
+        private const uint GW_HWNDNEXT = 2;      // z 序里下一个（更靠下）
+        private const uint GW_HWNDPREV = 3;      // z 序里上一个（更靠上）
         private const uint SWP_NOSIZE = 0x0001;
         private const uint SWP_NOMOVE = 0x0002;
         private const uint SWP_NOACTIVATE = 0x0010;
-        private const uint SWP_SHOWWINDOW = 0x0040;
-        private const uint SWP_FRAMECHANGED = 0x0020;
-        private const uint SWP_NOZORDER = 0x0004;
-        private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
-        private static readonly IntPtr HWND_TOP = IntPtr.Zero;
-        private static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
-        private static readonly IntPtr HWND_BOTTOM = new IntPtr(1);
 
-        private static List<Form> _forms = new List<Form>();
+        private static readonly List<Form> _forms = new List<Form>();
         private static Timer _timer;
-        private static WinEventDelegate _proc;      // 必须留引用
-        private static bool _busy;
-        private static bool _lastDesktop;
+        private static WinEventDelegate _proc;      // 必须留引用，否则会被回收
         private static bool _hooked;
 
-        /// <summary>注册一个要守护的窗口，注册即生效。</summary>
+        /// <summary>供 Trace 采样用（只读）。</summary>
+        internal static List<Form> Forms { get { return _forms; } }
+
         public static void Register(Form form)
         {
             if (form == null) return;
-            if (_forms.Contains(form)) return;
-            _forms.Add(form);
-            GuardLog("register " + form.Text + " hwnd=" + form.Handle);
+            if (!_forms.Contains(form)) _forms.Add(form);
+
+            GuardLog("register " + SafeText(form) + " hwnd=" + form.Handle);
+            Place(form);
 
             if (_timer == null)
             {
                 _timer = new Timer();
-                _timer.Interval = 150;
-                _timer.Tick += delegate { Apply(); };
+                _timer.Interval = 1000;          // 只做"是否被顶上去"的巡检，正常情况不发任何 SetWindowPos
+                _timer.Tick += delegate { PlaceAll(); };
                 _timer.Start();
             }
 
             if (!_hooked)
             {
                 _hooked = true;
-                _proc = new WinEventDelegate(delegate { Apply(); });
+                _proc = new WinEventDelegate(delegate { PlaceAll(); });
                 try
                 {
                     SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
@@ -117,184 +87,77 @@ namespace DeskBoxes
             }
         }
 
-        /// <summary>供 Trace 采样用（只读）。</summary>
-        internal static List<Form> Forms { get { return _forms; } }
-
         public static void Unregister(Form form)
         {
             if (form != null) _forms.Remove(form);
         }
 
-        /// <summary>
-        /// 把窗口抬到 TOPMOST 层的最前面。
-        /// 菜单是「所属窗口」，会叠在 owner 之上——所以只要先把面板抬到所有盒子之上，
-        /// 弹出的设置菜单就不会被 Hermes/余额等 TOPMOST 盒子盖住。
-        /// </summary>
-        public static void RaiseToFront(IntPtr h)
-        {
-            if (h == IntPtr.Zero) return;
-            try
-            {
-                // 只有「桌面在前台」时其它盒子才是 TOPMOST，这时才需要把自己也升上去；
-                // 平常的前台是别的应用，强行 TOPMOST 会让面板压在别人上面。
-                if (IsDesktopClass(ClassOf(GetForegroundWindow())))
-                    SetWindowPos(h, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-                SetWindowPos(h, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-            }
-            catch { }
-        }
-
-        /// <summary>
-        /// 把弹出菜单抬到 TOPMOST 层。
-        /// 盒子本身在桌面前台时是 TOPMOST，普通菜单会被压在盒子下面（点设置却看不到菜单）。
-        /// </summary>
-        /// <summary>
-        /// 统一的 z-order 调整。
-        /// 注意：必须带上窗口当前的真实尺寸、**不能加 SWP_NOSIZE** ——
-        /// 实测快捷键盒子带 SWP_NOSIZE 时 SetWindowPos 返回 True 但 TOPMOST 位不生效
-        /// （Win+D 后就浮不上来），去掉 NOSIZE 立刻正常。
-        /// </summary>
-        private static bool ZOrder(IntPtr h, IntPtr after, bool show)
-        {
-            if (h == IntPtr.Zero) return false;
-            try
-            {
-                RECT rc;
-                if (!GetWindowRect(h, out rc)) return false;
-                int cw = rc.Right - rc.Left, ch = rc.Bottom - rc.Top;
-                if (cw <= 0 || ch <= 0) return false;
-
-                bool wantTop = after == HWND_TOPMOST;
-                bool wantNotTop = after == HWND_NOTOPMOST;
-                uint showFlag = show ? SWP_SHOWWINDOW : 0u;
-
-                // ① NOMOVE | NOSIZE（实测这条对 Hermes / 余额 / 面板都有效）
-                SetWindowPos(h, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | showFlag);
-                if (ZOrderOk(h, wantTop, wantNotTop)) return true;
-
-                // ② 带真实尺寸 + NOMOVE（快捷键盒子只认这一组）
-                SetWindowPos(h, after, 0, 0, cw, ch, SWP_NOMOVE | SWP_NOACTIVATE | showFlag);
-                if (ZOrderOk(h, wantTop, wantNotTop)) return true;
-
-                // ③ 交给系统做整段 Z 序迁移（不带 NOMOVE）
-                SetWindowPos(h, after, rc.Left, rc.Top, cw, ch, SWP_NOACTIVATE | showFlag);
-                return ZOrderOk(h, wantTop, wantNotTop);
-            }
-            catch { return false; }
-        }
-
-        /// <summary>SetWindowPos 会「返回成功但不生效」，所以必须回读 exstyle 确认。</summary>
-        private static bool ZOrderOk(IntPtr h, bool wantTop, bool wantNotTop)
-        {
-            bool isTop = (GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
-            if (wantTop) return isTop;
-            if (wantNotTop) return !isTop;
-            return true;
-        }
-
-        /// <summary>
-        /// 窗口显示后调用：新显示的窗口会被排到 z 序最上。
-        /// 桌面在前台时交给状态机（下一帧会置顶）；否则直接压到最底，避免短暂盖住应用。
-        /// </summary>
+        /// <summary>窗口显示后调用：新窗口会被系统排到最上，必须重新归位到桌面层。</summary>
         public static void BringToBottom(Form f)
         {
-            if (f == null || f.IsDisposed || !f.IsHandleCreated) return;
+            Place(f);
+        }
+
+        public static void PlaceAll()
+        {
+            Form[] arr = _forms.ToArray();
+            for (int i = 0; i < arr.Length; i++) Place(arr[i]);
+        }
+
+        /// <summary>把窗口归位到桌面承载窗口的正上方（已在上面就不动，避免无谓重绘）。</summary>
+        private static void Place(Form f)
+        {
             try
             {
+                if (f == null || f.IsDisposed || !f.IsHandleCreated) return;
                 if (!IsWindowVisible(f.Handle)) return;
-                if (IsDesktopClass(ClassOf(GetForegroundWindow()))) return;   // 桌面在前台：交给状态机置顶
-                PlaceBelowForeground(f.Handle);
+
+                IntPtr desk = DesktopWindow();
+                if (desk == IntPtr.Zero) return;
+                if (IsAbove(f.Handle, desk)) return;        // 已经就位
+
+                IntPtr referent = GetWindow(desk, GW_HWNDPREV);   // 桌面正上方那个窗口
+                SetWindowPos(f.Handle, referent, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                Trace.Line("PLACE " + f.Text + " ref=" + ClassOf(referent));
             }
             catch { }
         }
 
-        /// <summary>
-        /// 把窗口插到前台窗口的正下方。
-        /// 为什么必须有：HWND_NOTOPMOST 的语义是"放到所有非置顶窗口之上"，
-        /// 单用它降级会把盒子顶到正在用的应用上面（用户实测到的"盒子盖住应用"）。
-        /// </summary>
-        public static void PlaceBelowForeground(IntPtr h)
+        /// <summary>从 h 往下走，能走到桌面窗口 = 盒子在桌面之上。</summary>
+        private static bool IsAbove(IntPtr h, IntPtr desk)
         {
-            if (h == IntPtr.Zero) return;
-            try
-            {
-                IntPtr fg = GetForegroundWindow();
-                if (fg == IntPtr.Zero || fg == h) return;
-                SetWindowPos(h, fg, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-            }
-            catch { }
+            for (IntPtr w = GetWindow(h, GW_HWNDNEXT); w != IntPtr.Zero; w = GetWindow(w, GW_HWNDNEXT))
+                if (w == desk) return true;
+            return false;
         }
 
-        /// <summary>
-        /// 让置顶的盒子给应用"让路"：把每个可见应用窗口的矩形从盒子窗口区域里挖掉。
-        ///
-        /// 为什么需要：桌面在前台时盒子必须置顶，否则会被桌面图标层 SysListView32 压住
-        /// （可见但点不到）。可一旦置顶，未最大化的文件浏览器就会被盒子盖住。
-        /// 挖洞后：应用所在矩形显示的是应用本身，其余区域仍是盒子 —— 视觉上等价于
-        /// "盒子在应用下面"，而盒子在桌面上依然可点。
-        /// </summary>
-        private static void ApplyCutout(Form f)
+        private static IntPtr DesktopWindow()
         {
-            IntPtr h = f.Handle;
-            bool topmost = (GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
-
-            RECT box;
-            if (!GetWindowRect(h, out box)) return;
-            int bw = box.Right - box.Left, bh = box.Bottom - box.Top;
-            if (bw <= 0 || bh <= 0) return;
-
-            StringBuilder sig = new StringBuilder();
-            IntPtr rgn = IntPtr.Zero;
-            if (topmost)
-            {
-                rgn = CreateRectRgn(0, 0, bw, bh);
-                uint me = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
-
-                for (IntPtr wnd = GetTopWindow(IntPtr.Zero); wnd != IntPtr.Zero; wnd = GetWindow(wnd, GW_HWNDNEXT))
-                {
-                    if (wnd == h || !IsWindowVisible(wnd)) continue;
-                    uint pid; GetWindowThreadProcessId(wnd, out pid);
-                    if (pid == me) continue;                       // 我们自己的盒子
-                    string c = ClassOf(wnd);
-                    if (IsDesktopClass(c)) continue;               // 桌面/任务栏/IME
-                    if ((GetWindowLongW(wnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0) continue;
-                    if (GetWindowTextLengthW(wnd) == 0) continue;  // 无标题 = 辅助窗口
-
-                    RECT r;
-                    if (!GetWindowRect(wnd, out r)) continue;
-                    int l = Math.Max(r.Left, box.Left) - box.Left;
-                    int t = Math.Max(r.Top, box.Top) - box.Top;
-                    int rr = Math.Min(r.Right, box.Right) - box.Left;
-                    int bb = Math.Min(r.Bottom, box.Bottom) - box.Top;
-                    if (rr <= l || bb <= t) continue;              // 不相交
-
-                    IntPtr cut = CreateRectRgn(l, t, rr, bb);
-                    CombineRgn(rgn, rgn, cut, RGN_DIFF);
-                    DeleteObject(cut);
-                    sig.Append(l).Append(',').Append(t).Append(',').Append(rr).Append(',').Append(bb).Append(';');
-                }
-            }
-
-            string key = sig.ToString();
-            string old;
-            if (_cutSig.TryGetValue(h, out old) && old == key)
-            {
-                if (rgn != IntPtr.Zero) DeleteObject(rgn);
-                return;
-            }
-            _cutSig[h] = key;
-
-            if (topmost && key.Length > 0) SetWindowRgn(h, rgn, true);   // 系统接管区域所有权
-            else { if (rgn != IntPtr.Zero) DeleteObject(rgn); SetWindowRgn(h, IntPtr.Zero, true); }
+            IntPtr p = FindWindowW("Progman", null);
+            if (p != IntPtr.Zero) return p;
+            return FindWindowW("WorkerW", null);
         }
 
-        private static readonly System.Collections.Generic.Dictionary<IntPtr, string> _cutSig =
-            new System.Collections.Generic.Dictionary<IntPtr, string>();
+        // ---- 兼容旧调用点 ----
+        // 菜单是独立 popup，天然浮在所有盒子之上，不需要抬高 owner。
+        public static void RaiseToFront(IntPtr h) { }
+        public static void RaiseMenu(IntPtr h) { }
 
-        public static void RaiseMenu(IntPtr h)
+        private static string SafeText(Form f)
         {
-            ZOrder(h, HWND_TOPMOST, false);
+            try { return f.Text; } catch { return "?"; }
         }
+
+        private static string ClassOf(IntPtr h)
+        {
+            if (h == IntPtr.Zero) return "-";
+            StringBuilder sb = new StringBuilder(96);
+            GetClassNameW(h, sb, 96);
+            return sb.ToString();
+        }
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetClassNameW(IntPtr hWnd, StringBuilder buf, int n);
 
         private static void GuardLog(string msg)
         {
@@ -304,131 +167,6 @@ namespace DeskBoxes
                     DateTime.Now.ToString("HH:mm:ss.fff") + "  " + msg + Environment.NewLine);
             }
             catch { }
-        }
-
-        private static string SafeTitle()
-        {
-            try
-            {
-                StringBuilder sb2 = new StringBuilder(128);
-                GetWindowTextW(GetForegroundWindow(), sb2, 128);
-                return sb2.ToString();
-            }
-            catch { return ""; }
-        }
-
-        private static string ClassOf(IntPtr h)
-        {
-            if (h == IntPtr.Zero) return "";
-            StringBuilder sb = new StringBuilder(64);
-            GetClassName(h, sb, 64);
-            return sb.ToString();
-        }
-
-        private static bool IsDesktopClass(string c)
-        {
-            return c == "Progman" || c == "WorkerW" ||
-                   c == "SHELLDLL_DefView" || c == "SysListView32" ||
-                   // Win11：点桌面/任务栏区域时前台会变成 shell 的 XAML 宿主，必须同样视为桌面，
-                   // 否则会把盒子降级 → 桌面图标层压上去（2026-10-30 trace 实测到）
-                   c == "XamlExplorerHostIslandWindow_WASDK";
-        }
-
-        /// <summary>一帧内统一处理所有已注册窗口。</summary>
-        private static void Apply()
-        {
-            if (_busy) return;
-            try
-            {
-                _busy = true;
-
-                bool desktopForeground = IsDesktopClass(ClassOf(GetForegroundWindow()));
-                if (desktopForeground != _lastDesktop)
-                {
-                    _lastDesktop = desktopForeground;
-                    string fg = ClassOf(GetForegroundWindow());
-                    StringBuilder sb = new StringBuilder("desktop=" + desktopForeground + " fg=" + fg);
-                    for (int k = 0; k < _forms.Count; k++)
-                    {
-                        Form g = _forms[k];
-                        if (g == null) continue;
-                        sb.Append(" | ").Append(g.Text)
-                          .Append(" top=").Append((GetWindowLongW(g.Handle, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0)
-                          .Append(" vis=").Append(IsWindowVisible(g.Handle))
-                          .Append(" min=").Append(g.WindowState == FormWindowState.Minimized);
-                    }
-                    GuardLog(sb.ToString());
-
-                    // 刚回到桌面：后面几帧强制重新置顶，压过刚被抬上来的桌面图标层
-                    _burst = desktopForeground ? 10 : 0;
-                }
-
-                Form[] arr = _forms.ToArray();
-                for (int i = 0; i < arr.Length; i++)
-                {
-                    Form f = arr[i];
-                    if (f == null || f.IsDisposed || !f.IsHandleCreated) continue;
-
-                    try
-                    {
-                        IntPtr h = f.Handle;
-
-                        // 用户主动隐藏的盒子（托盘 / 盒子右键「隐藏这个盒子」）不要碰：
-                        // 既不要置顶，更不要在这里把它重新显示出来 —— 否则一开设置菜单
-                        // （桌面回到前台）隐藏的盒子就自己弹回来了。
-                        if (!IsWindowVisible(h)) continue;
-
-                        if (f.WindowState == FormWindowState.Minimized)
-                            f.WindowState = FormWindowState.Normal;
-
-                        bool topmost = (GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
-
-                        if (desktopForeground)
-                        {
-                            // burst 期间即使已经置顶也要重刷：桌面激活后图标层会被抬到
-                            // TOPMOST 层最上面，把我们压在底下（"点了桌面盒子就没了"）。
-                            if (!topmost)
-                                Trace.Line("RAISE " + f.Text + " (fg=desktop burst=" + _burst + ")");
-                            if (!topmost || _burst > 0)
-                            {
-                                // 必须同时把 WinForms 的 TopMost 属性置 true：
-                                // 只用 SetWindowPos 改 exstyle，属性仍是 false，之后盒子一旦
-                                // 自己 SetBounds（Hermes 刷新时重设 Location、快捷键盒子拖动），
-                                // WinForms 会按属性把窗口打回非置顶 —— 表现就是"Win+D 后它浮不上来"。
-                                if (!f.TopMost) f.TopMost = true;
-                                if ((GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0)
-                                {
-                                    // 属性没生效（有些窗口只认特定 flag 组合）→ 原始 API 兜底
-                                    ZOrder(h, HWND_TOPMOST, false);
-                                }
-
-                            }
-                        }
-                        else if (topmost)
-                        {
-                            Trace.Line("DROP " + f.Text + " (fg=" + ClassOf(GetForegroundWindow()) + ", title=" + SafeTitle() + ")");
-                            // 只要不是桌面在前台（哪怕是自己的盒子在前台），就必须落回：
-                            // 用户明确要求盒子不能压住正常应用。
-                            if (f.TopMost) f.TopMost = false;   // 注意：这个 setter 内部已经清掉 WS_EX_TOPMOST 了
-                            if ((GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0)
-                            {
-                                if (!ZOrder(h, HWND_NOTOPMOST, false))
-                                    GuardLog("DROP-FAIL " + f.Text + " fg=" + ClassOf(GetForegroundWindow()));
-                            }
-                            // 无条件执行：清 TOPMOST 的动作会把自己顶到普通层最上面（WinForms 的
-                            // TopMost=false 内部同样调 SetWindowPos(HWND_NOTOPMOST)），
-                            // 必须接着把自己插到前台窗口下面，否则就盖在应用上了。
-                            PlaceBelowForeground(h);
-                            Trace.Line("BELOW-FG " + f.Text + " above=" + ClassOf(GetForegroundWindow()));
-                        }
-                        ApplyCutout(f);
-                    }
-                    catch (Exception ex) { GuardLog("ERR " + f.Text + " " + ex.GetType().Name + ": " + ex.Message); }
-                }
-                if (_burst > 0) _burst--;
-            }
-            catch { }
-            finally { _busy = false; }
         }
     }
 }
