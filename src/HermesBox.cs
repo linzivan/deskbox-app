@@ -502,6 +502,7 @@ namespace DeskBoxes
 
             DeskGuard.RaiseToFront(Handle);
             m.Show(this, at);
+            MenuWatch.Watch(m);
 
             DeskGuard.RaiseMenu(m.Handle);
         }

@@ -1324,6 +1324,7 @@ namespace DeskBoxes
 
             DeskGuard.RaiseToFront(Handle);      // 面板先到最前，菜单才压得住其他 TOPMOST 盒子
             m.Show(this, at);
+            MenuWatch.Watch(m);
 
             DeskGuard.RaiseMenu(m.Handle);
         }
@@ -1348,6 +1349,7 @@ namespace DeskBoxes
                     delegate { if (RequestNewSection != null) RequestNewSection(this, EventArgs.Empty); });
                 DeskGuard.RaiseToFront(Handle);      // 面板先到最前，菜单才压得住其他 TOPMOST 盒子
                 lm.Show(this, at);
+                MenuWatch.Watch(lm);
 
             DeskGuard.RaiseMenu(lm.Handle);
                 return;
@@ -1396,6 +1398,7 @@ namespace DeskBoxes
 
             DeskGuard.RaiseToFront(Handle);      // 面板先到最前，菜单才压得住其他 TOPMOST 盒子
             m.Show(this, at);
+            MenuWatch.Watch(m);
 
             DeskGuard.RaiseMenu(m.Handle);
         }
@@ -1484,6 +1487,7 @@ namespace DeskBoxes
 
             DeskGuard.RaiseToFront(Handle);      // 面板先到最前，菜单才压得住其他 TOPMOST 盒子
             m.Show(this, at);
+            MenuWatch.Watch(m);
 
             DeskGuard.RaiseMenu(m.Handle);
         }
