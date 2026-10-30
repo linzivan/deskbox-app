@@ -190,7 +190,24 @@ namespace DeskBoxes
             {
                 if (!IsWindowVisible(f.Handle)) return;
                 if (IsDesktopClass(ClassOf(GetForegroundWindow()))) return;   // 桌面在前台：交给状态机置顶
-                SetWindowPos(f.Handle, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                PlaceBelowForeground(f.Handle);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 把窗口插到前台窗口的正下方。
+        /// 为什么必须有：HWND_NOTOPMOST 的语义是"放到所有非置顶窗口之上"，
+        /// 单用它降级会把盒子顶到正在用的应用上面（用户实测到的"盒子盖住应用"）。
+        /// </summary>
+        public static void PlaceBelowForeground(IntPtr h)
+        {
+            if (h == IntPtr.Zero) return;
+            try
+            {
+                IntPtr fg = GetForegroundWindow();
+                if (fg == IntPtr.Zero || fg == h) return;
+                SetWindowPos(h, fg, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             }
             catch { }
         }
@@ -232,7 +249,10 @@ namespace DeskBoxes
         private static bool IsDesktopClass(string c)
         {
             return c == "Progman" || c == "WorkerW" ||
-                   c == "SHELLDLL_DefView" || c == "SysListView32";
+                   c == "SHELLDLL_DefView" || c == "SysListView32" ||
+                   // Win11：点桌面/任务栏区域时前台会变成 shell 的 XAML 宿主，必须同样视为桌面，
+                   // 否则会把盒子降级 → 桌面图标层压上去（2026-10-30 trace 实测到）
+                   c == "XamlExplorerHostIslandWindow_WASDK";
         }
 
         /// <summary>一帧内统一处理所有已注册窗口。</summary>
@@ -310,12 +330,17 @@ namespace DeskBoxes
                             Trace.Line("DROP " + f.Text + " (fg=" + ClassOf(GetForegroundWindow()) + ", title=" + SafeTitle() + ")");
                             // 只要不是桌面在前台（哪怕是自己的盒子在前台），就必须落回：
                             // 用户明确要求盒子不能压住正常应用。
-                            if (f.TopMost) f.TopMost = false;
+                            if (f.TopMost) f.TopMost = false;   // 注意：这个 setter 内部已经清掉 WS_EX_TOPMOST 了
                             if ((GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0)
                             {
                                 if (!ZOrder(h, HWND_NOTOPMOST, false))
                                     GuardLog("DROP-FAIL " + f.Text + " fg=" + ClassOf(GetForegroundWindow()));
                             }
+                            // 无条件执行：清 TOPMOST 的动作会把自己顶到普通层最上面（WinForms 的
+                            // TopMost=false 内部同样调 SetWindowPos(HWND_NOTOPMOST)），
+                            // 必须接着把自己插到前台窗口下面，否则就盖在应用上了。
+                            PlaceBelowForeground(h);
+                            Trace.Line("BELOW-FG " + f.Text + " above=" + ClassOf(GetForegroundWindow()));
                         }
                     }
                     catch (Exception ex) { GuardLog("ERR " + f.Text + " " + ex.GetType().Name + ": " + ex.Message); }
