@@ -28,6 +28,8 @@ namespace DeskBoxes
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetWindowTextW(IntPtr hWnd, StringBuilder buf, int n);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         private static extern int GetClassName(IntPtr hWnd, StringBuilder buf, int n);
         [DllImport("user32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int cmd);
@@ -101,6 +103,9 @@ namespace DeskBoxes
                 catch { }
             }
         }
+
+        /// <summary>供 Trace 采样用（只读）。</summary>
+        internal static List<Form> Forms { get { return _forms; } }
 
         public static void Unregister(Form form)
         {
@@ -205,6 +210,17 @@ namespace DeskBoxes
             catch { }
         }
 
+        private static string SafeTitle()
+        {
+            try
+            {
+                StringBuilder sb2 = new StringBuilder(128);
+                GetWindowTextW(GetForegroundWindow(), sb2, 128);
+                return sb2.ToString();
+            }
+            catch { return ""; }
+        }
+
         private static string ClassOf(IntPtr h)
         {
             if (h == IntPtr.Zero) return "";
@@ -272,6 +288,8 @@ namespace DeskBoxes
                         {
                             // burst 期间即使已经置顶也要重刷：桌面激活后图标层会被抬到
                             // TOPMOST 层最上面，把我们压在底下（"点了桌面盒子就没了"）。
+                            if (!topmost)
+                                Trace.Line("RAISE " + f.Text + " (fg=desktop burst=" + _burst + ")");
                             if (!topmost || _burst > 0)
                             {
                                 // 必须同时把 WinForms 的 TopMost 属性置 true：
@@ -289,6 +307,7 @@ namespace DeskBoxes
                         }
                         else if (topmost)
                         {
+                            Trace.Line("DROP " + f.Text + " (fg=" + ClassOf(GetForegroundWindow()) + ", title=" + SafeTitle() + ")");
                             // 只要不是桌面在前台（哪怕是自己的盒子在前台），就必须落回：
                             // 用户明确要求盒子不能压住正常应用。
                             if (f.TopMost) f.TopMost = false;

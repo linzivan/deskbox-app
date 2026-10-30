@@ -48,6 +48,8 @@ namespace DeskBoxes
             };
             _saveTimer.Start();
 
+            Trace.Start();          // 层级问题追踪：%APPDATA%\DeskBoxes	race.log
+
             BuildTray();
             BuildPanel();
             BuildWidgets();
