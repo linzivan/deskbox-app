@@ -25,6 +25,11 @@ namespace DeskBoxes
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr hdcDst, ref POINT pptDst,
             ref SIZE psize, IntPtr hdcSrc, ref POINT pptSrc, int crKey, ref BLENDFUNCTION pblend, int dwFlags);
+
+        // 桌面层模式：pptDst 传 NULL，位置交给 SetWindowPos 管（子窗口的坐标换算由 DesktopHost 负责）
+        [DllImport("user32.dll", EntryPoint = "UpdateLayeredWindow")]
+        private static extern bool UpdateLayeredWindowKeepPos(IntPtr hwnd, IntPtr hdcDst, IntPtr pptDst,
+            ref SIZE psize, IntPtr hdcSrc, ref POINT pptSrc, int crKey, ref BLENDFUNCTION pblend, int dwFlags);
         [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hWnd);
         [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
         [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr hDC);
@@ -39,6 +44,8 @@ namespace DeskBoxes
         private const byte AC_SRC_ALPHA = 0x01;
         private const int ResizeBorder = 10;
         private const int Radius = 14;
+
+        private System.Windows.Forms.Timer _layer;   // 桌面层模式的看门狗
 
         private AppState _st;
         private double _balance = -1;
@@ -104,7 +111,9 @@ namespace DeskBoxes
             get
             {
                 CreateParams cp = base.CreateParams;
-                cp.ExStyle |= WS_EX_LAYERED | WS_EX_TOOLWINDOW;
+                cp.ExStyle |= WS_EX_TOOLWINDOW;
+                if (DesktopHost.Enabled) cp.ExStyle |= 0x08000000;   // WS_EX_NOACTIVATE：点盒子不抢焦点
+                else cp.ExStyle |= WS_EX_LAYERED;                    // 分层只对顶层窗口有效，桌面层模式不能加
                 return cp;
             }
         }
@@ -112,7 +121,22 @@ namespace DeskBoxes
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            if (!_guardOn) { _guardOn = true; DeskGuard.Register(this); }   // Win+D 后自动回到桌面
+            if (DesktopHost.Enabled)
+            {
+                // 桌面层模式：挂成桌面子窗口，不走 DeskGuard 的置顶状态机
+                BeginInvoke((Action)delegate
+                {
+                    DesktopHost.Attach(this);
+                    if (_layer == null)
+                    {
+                        _layer = new System.Windows.Forms.Timer();
+                        _layer.Interval = 400;
+                        _layer.Tick += delegate { DesktopHost.Keep(this); };
+                        _layer.Start();
+                    }
+                });
+            }
+            else if (!_guardOn) { _guardOn = true; DeskGuard.Register(this); }   // Win+D 后自动回到桌面
             Render();
             Fetch();
         }
@@ -190,7 +214,19 @@ namespace DeskBoxes
                         BlendOp = AC_SRC_OVER, BlendFlags = 0,
                         SourceConstantAlpha = 255, AlphaFormat = AC_SRC_ALPHA
                     };
-                    UpdateLayeredWindow(Handle, screenDc, ref dst, ref size, memDc, ref src, 0, ref bf, ULW_ALPHA);
+                    if (DesktopHost.Enabled)
+                    {
+                        bool ok = UpdateLayeredWindowKeepPos(Handle, screenDc, IntPtr.Zero, ref size, memDc, ref src, 0, ref bf, ULW_ALPHA);
+                        try
+                        {
+                            System.IO.File.AppendAllText(System.IO.Path.Combine(ConfigStore.Dir, "ulw.log"),
+                                DateTime.Now.ToString("HH:mm:ss.fff") + " ok=" + ok + " err=" + Marshal.GetLastWin32Error()
+                                + " client=" + Left + "," + Top + " size=" + w + "x" + h + Environment.NewLine);
+                        }
+                        catch { }
+                    }
+                    else
+                        UpdateLayeredWindow(Handle, screenDc, ref dst, ref size, memDc, ref src, 0, ref bf, ULW_ALPHA);
                 }
                 finally
                 {
@@ -543,12 +579,22 @@ namespace DeskBoxes
         protected override void OnLocationChanged(EventArgs e)
         {
             base.OnLocationChanged(e);
-            if (_st != null) { _st.BalX = Left; _st.BalY = Top; }
+            if (_st != null)
+            {
+                if (DesktopHost.Enabled)
+                {
+                    // 子窗口的 Left/Top 是父窗口客户区坐标；配置里要存屏幕坐标
+                    Point p = PointToScreen(Point.Empty);
+                    _st.BalX = p.X; _st.BalY = p.Y;
+                }
+                else { _st.BalX = Left; _st.BalY = Top; }
+            }
             Render();
         }
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             DeskGuard.Unregister(this);
+            try { if (_layer != null) { _layer.Stop(); _layer.Dispose(); _layer = null; } } catch { }
             base.OnFormClosed(e);
         }
 

@@ -59,6 +59,10 @@ namespace DeskBoxes
             };
 
             if (_st.HideAll) _panel.Hide();
+
+            // BuildTray 早于 BuildPanel/BuildWidgets 执行，第一次构建的菜单里四个盒子还没建出来，
+            // 状态一定是错的 —— 盒子都建好后再刷一次。
+            RefreshTrayMenu();
         }
 
         private void BuildPanel()
@@ -143,47 +147,10 @@ namespace DeskBoxes
             m.Items.Add(restore);
 
             m.Items.Add(new ToolStripSeparator());
-            m.Items.Add(_panel != null && _panel.Visible ? "隐藏面板" : "显示面板", null,
-                delegate { TogglePanel(); });
-
-            ToolStripMenuItem balItem = new ToolStripMenuItem("余额盒子");
-            balItem.Checked = _balance != null && _balance.Visible;
-            balItem.Click += delegate
-            {
-                if (_balance == null) return;
-                if (_balance.Visible) { _balance.Hide(); _st.BalVisible = false; }
-                else { _balance.Show(); _st.BalVisible = true; }
-                _dirty = true;
-                RefreshTrayMenu();
-            };
-            m.Items.Add(balItem);
-
-            ToolStripMenuItem keyItem = new ToolStripMenuItem("快捷键盒子");
-            keyItem.Checked = _shortcuts != null && _shortcuts.Visible;
-            keyItem.Click += delegate
-            {
-                if (_shortcuts == null) return;
-                if (_shortcuts.Visible) { _shortcuts.Hide(); _st.KeyVisible = false; }
-                else { _shortcuts.Show(); _st.KeyVisible = true; }
-                _dirty = true;
-                RefreshTrayMenu();
-            };
-            m.Items.Add(keyItem);
-
-            ToolStripMenuItem hermesItem = new ToolStripMenuItem("Hermes 盒子");
-            hermesItem.Checked = _st.HermesVisible;
-            hermesItem.Click += delegate
-            {
-                _st.HermesVisible = !_st.HermesVisible;
-                if (_hermes != null)
-                {
-                    if (_st.HermesVisible) _hermes.Fetch();
-                    else _hermes.Hide();
-                }
-                _dirty = true;
-                RefreshTrayMenu();
-            };
-            m.Items.Add(hermesItem);
+            m.Items.Add(BuildBoxItem(0));
+            m.Items.Add(BuildBoxItem(1));
+            m.Items.Add(BuildBoxItem(2));
+            m.Items.Add(BuildBoxItem(3));
             m.Items.Add(new ToolStripSeparator());
 
             ToolStripMenuItem secs = new ToolStripMenuItem("分区（" + _st.Sections.Count + "）");
@@ -257,16 +224,130 @@ namespace DeskBoxes
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("退出", null, delegate { Quit(); });
 
+            m.Opening += delegate { SyncBoxItems(); };   // 每次打开前重算：任何来源的显隐变化都能同步
             _tray.Menu = m;
+        }
+
+        // ================= 盒子显隐（唯一入口） =================
+        // 约定：勾选 = **用户意图**（配置），不是当前窗口可见性。
+        // 意图为「显示」但实际不可见时，在文字后注明原因（Hermes 未运行等），
+        // 这样"勾着但看不见"有解释，而不是让勾选跟着自动隐藏一起灭掉。
+        private ToolStripMenuItem _mPanel, _mBal, _mKey, _mHermes;
+
+        private static readonly string[] BoxNames = { "桌面应用盒子", "余额盒子", "快捷键盒子", "Hermes 盒子" };
+
+        private bool BoxIntent(int kind)
+        {
+            switch (kind)
+            {
+                case 0: return _panel != null && !_st.HideAll;
+                case 1: return _st.BalVisible;
+                case 2: return _st.KeyVisible;
+                default: return _st.HermesVisible;
+            }
+        }
+
+        private bool BoxActual(int kind)
+        {
+            switch (kind)
+            {
+                case 0: return _panel != null && _panel.Visible;
+                case 1: return _balance != null && _balance.Visible;
+                case 2: return _shortcuts != null && _shortcuts.Visible;
+                default: return _hermes != null && _hermes.Visible;
+            }
+        }
+
+        /// <summary>唯一入口：改意图（仅用户操作）→ 应用可见性 → 刷新菜单。</summary>
+        internal void SetBoxVisible(int kind, bool on, bool byUser)
+        {
+            try
+            {
+                if (byUser)
+                {
+                    if (kind == 0) _st.HideAll = !on;
+                    else if (kind == 1) _st.BalVisible = on;
+                    else if (kind == 2) _st.KeyVisible = on;
+                    else _st.HermesVisible = on;
+                }
+
+                if (kind == 0 && _panel != null) { if (on) _panel.Show(); else _panel.Hide(); }
+                else if (kind == 1 && _balance != null) { if (on) _balance.Show(); else _balance.Hide(); }
+                else if (kind == 2 && _shortcuts != null) { if (on) _shortcuts.Show(); else _shortcuts.Hide(); }
+                else if (kind == 3 && _hermes != null)
+                {
+                    if (on) _hermes.Fetch();     // 有数据时 Fetch 内部会 Show
+                    else _hermes.Hide();
+                }
+
+                _dirty = true;
+                RefreshTrayMenu();
+            }
+            catch (Exception ex) { PanelForm.LogError("SetBoxVisible", ex); }
+        }
+
+        private ToolStripMenuItem BuildBoxItem(int kind)
+        {
+            ToolStripMenuItem it = new ToolStripMenuItem(BoxNames[kind]);
+            it.Click += delegate { SetBoxVisible(kind, !BoxIntent(kind), true); };
+
+            if (kind == 0) _mPanel = it;
+            else if (kind == 1) _mBal = it;
+            else if (kind == 2) _mKey = it;
+            else _mHermes = it;
+
+            SyncBoxItem(it, kind);
+            return it;
+        }
+
+        private void SyncBoxItem(ToolStripMenuItem it, int kind)
+        {
+            bool intent = BoxIntent(kind);
+            bool actual = BoxActual(kind);
+            it.Checked = intent;
+
+            string suffix = "";
+            if (intent && !actual) suffix = (kind == 3) ? "（未运行）" : "（未显示）";
+            it.Text = BoxNames[kind] + suffix;
+            it.ForeColor = suffix.Length > 0 ? SystemColors.GrayText : SystemColors.ControlText;
+        }
+
+        // 测试钩子用：模拟 Hermes 无数据自动隐藏（只改实际可见性，不动用户意图）
+        internal void HermesHideForTest() { if (_hermes != null) _hermes.Hide(); }
+
+        internal void DumpTrayBoxItems(string tag)
+        {
+            SyncBoxItems();   // 等价于用户打开菜单时的 Opening 事件
+            Console.WriteLine("--- " + tag);
+            if (_tray == null || _tray.Menu == null) { Console.WriteLine("  (no menu)"); Console.Out.Flush(); return; }
+            foreach (ToolStripItem it in _tray.Menu.Items)
+            {
+                ToolStripMenuItem mi = it as ToolStripMenuItem;
+                if (mi == null) continue;
+                for (int k = 0; k < BoxNames.Length; k++)
+                {
+                    if (mi.Text.StartsWith(BoxNames[k]))
+                    {
+                        Console.WriteLine("  [" + (mi.Checked ? "x" : " ") + "] " + mi.Text
+                            + "   (intent=" + BoxIntent(k) + " actual=" + BoxActual(k) + ")");
+                        break;
+                    }
+                }
+            }
+            Console.Out.Flush();
+        }
+
+        private void SyncBoxItems()
+        {
+            if (_mPanel != null) SyncBoxItem(_mPanel, 0);
+            if (_mBal != null) SyncBoxItem(_mBal, 1);
+            if (_mKey != null) SyncBoxItem(_mKey, 2);
+            if (_mHermes != null) SyncBoxItem(_mHermes, 3);
         }
 
         private void TogglePanel()
         {
-            if (_panel == null) return;
-            if (_panel.Visible) { _panel.Hide(); _st.HideAll = true; }
-            else { _panel.Show(); _st.HideAll = false; }
-            _dirty = true;
-            RefreshTrayMenu();
+            SetBoxVisible(0, !BoxIntent(0), true);   // 统一走单一入口
         }
 
         private void NewSection()
@@ -612,6 +693,18 @@ namespace DeskBoxes
                 if (Array.IndexOf(args, "--selftest") >= 0)
                 {
                     Environment.ExitCode = SelfTest();
+                    return;
+                }
+
+                // 测试钩子：--tray-dump 打印托盘里四个盒子的状态，并模拟两种变化
+                if (Array.IndexOf(args, "--tray-dump") >= 0)
+                {
+                    ctx.DumpTrayBoxItems("初始");
+                    ctx.SetBoxVisible(1, false, true);   // 模拟：用户在托盘里取消「余额盒子」
+                    ctx.DumpTrayBoxItems("用户取消余额盒子后");
+                    ctx.HermesHideForTest();             // 模拟：Hermes 无数据自动隐藏（不改意图）
+                    ctx.DumpTrayBoxItems("Hermes 自动隐藏后");
+                    Environment.ExitCode = 0;
                     return;
                 }
 
