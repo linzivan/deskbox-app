@@ -47,11 +47,6 @@ namespace DeskBoxes
         [DllImport("user32.dll")]
         private static extern bool GetWindowRect(IntPtr hWnd, out RECT rc);
 
-        [DllImport("user32.dll")]
-        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
-        [DllImport("kernel32.dll")]
-        private static extern uint GetCurrentProcessId();
-
         /// <summary>刚回到桌面时的连续重刷帧数（桌面激活后图标层会被抬到最上面）。</summary>
         private static int _burst;
 
@@ -149,18 +144,39 @@ namespace DeskBoxes
                 if (!GetWindowRect(h, out rc)) return false;
                 int cw = rc.Right - rc.Left, ch = rc.Bottom - rc.Top;
                 if (cw <= 0 || ch <= 0) return false;
-                uint flags = SWP_NOMOVE | SWP_NOACTIVATE;
-                if (show) flags |= SWP_SHOWWINDOW;
-                return SetWindowPos(h, after, 0, 0, cw, ch, flags);
+
+                bool wantTop = after == HWND_TOPMOST;
+                bool wantNotTop = after == HWND_NOTOPMOST;
+                uint showFlag = show ? SWP_SHOWWINDOW : 0u;
+
+                // ① NOMOVE | NOSIZE（实测这条对 Hermes / 余额 / 面板都有效）
+                SetWindowPos(h, after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | showFlag);
+                if (ZOrderOk(h, wantTop, wantNotTop)) return true;
+
+                // ② 带真实尺寸 + NOMOVE（快捷键盒子只认这一组）
+                SetWindowPos(h, after, 0, 0, cw, ch, SWP_NOMOVE | SWP_NOACTIVATE | showFlag);
+                if (ZOrderOk(h, wantTop, wantNotTop)) return true;
+
+                // ③ 交给系统做整段 Z 序迁移（不带 NOMOVE）
+                SetWindowPos(h, after, rc.Left, rc.Top, cw, ch, SWP_NOACTIVATE | showFlag);
+                return ZOrderOk(h, wantTop, wantNotTop);
             }
             catch { return false; }
+        }
+
+        /// <summary>SetWindowPos 会「返回成功但不生效」，所以必须回读 exstyle 确认。</summary>
+        private static bool ZOrderOk(IntPtr h, bool wantTop, bool wantNotTop)
+        {
+            bool isTop = (GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+            if (wantTop) return isTop;
+            if (wantNotTop) return !isTop;
+            return true;
         }
 
         public static void RaiseMenu(IntPtr h)
         {
             ZOrder(h, HWND_TOPMOST, false);
         }
-
 
         private static void GuardLog(string msg)
         {
@@ -215,10 +231,6 @@ namespace DeskBoxes
                     _burst = desktopForeground ? 10 : 0;
                 }
 
-                uint fgPid;
-                GetWindowThreadProcessId(GetForegroundWindow(), out fgPid);
-                bool ownForeground = fgPid == GetCurrentProcessId();
-
                 Form[] arr = _forms.ToArray();
                 for (int i = 0; i < arr.Length; i++)
                 {
@@ -245,20 +257,32 @@ namespace DeskBoxes
                             // TOPMOST 层最上面，把我们压在底下（"点了桌面盒子就没了"）。
                             if (!topmost || _burst > 0)
                             {
-                                // 直接置顶；对已置顶窗口是幂等的，不必靠「读完 exstyle 再判断」
-                                // ——那种写法会读到尚未生效的值，把能置顶的窗口误判成拒绝。
-                                ZOrder(h, HWND_TOPMOST, false);
+                                // 必须同时把 WinForms 的 TopMost 属性置 true：
+                                // 只用 SetWindowPos 改 exstyle，属性仍是 false，之后盒子一旦
+                                // 自己 SetBounds（Hermes 刷新时重设 Location、快捷键盒子拖动），
+                                // WinForms 会按属性把窗口打回非置顶 —— 表现就是"Win+D 后它浮不上来"。
+                                if (!f.TopMost) f.TopMost = true;
+                                if ((GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0)
+                                {
+                                    // 属性没生效（有些窗口只认特定 flag 组合）→ 原始 API 兜底
+                                    ZOrder(h, HWND_TOPMOST, false);
+                                }
+
                             }
                         }
-                        else if (topmost && !ownForeground)
+                        else if (topmost)
                         {
-                            // 前台是我们自己的窗口（点盒子、弹菜单）时先不动层级，
-                            // 否则点一下盒子就全体降级，再回桌面又要重新抢一次置顶。
-                            // 落回必须让 SetWindowPos 自己处理整个 Z 序迁移。
-                            ZOrder(h, HWND_NOTOPMOST, false);
+                            // 只要不是桌面在前台（哪怕是自己的盒子在前台），就必须落回：
+                            // 用户明确要求盒子不能压住正常应用。
+                            if (f.TopMost) f.TopMost = false;
+                            if ((GetWindowLongW(h, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0)
+                            {
+                                if (!ZOrder(h, HWND_NOTOPMOST, false))
+                                    GuardLog("DROP-FAIL " + f.Text + " fg=" + ClassOf(GetForegroundWindow()));
+                            }
                         }
                     }
-                    catch { }
+                    catch (Exception ex) { GuardLog("ERR " + f.Text + " " + ex.GetType().Name + ": " + ex.Message); }
                 }
                 if (_burst > 0) _burst--;
             }
