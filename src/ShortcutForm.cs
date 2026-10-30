@@ -501,6 +501,7 @@ namespace DeskBoxes
                 Raise();
             });
 
+            if (MenuAudit.On) { MenuAudit.Capture("快捷键盒子-菜单", m); return; }
             DeskGuard.RaiseToFront(Handle);
             m.Show(this, at);
             MenuWatch.Watch(m);

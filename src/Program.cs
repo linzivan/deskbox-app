@@ -664,7 +664,8 @@ namespace DeskBoxes
         static void Main(string[] args)
         {
             bool created;
-            using (Mutex mutex = new Mutex(true, "DeskBoxes_SingleInstance_v2", out created))
+            string mutexName = Array.IndexOf(args, "--audit-menus") >= 0 ? "DeskBoxes_AuditInstance" : "DeskBoxes_SingleInstance_v2";
+            using (Mutex mutex = new Mutex(true, mutexName, out created))
             {
                 if (!created)
                 {
@@ -687,6 +688,13 @@ namespace DeskBoxes
                 {
                     PanelForm.LogError("UnhandledException", e.ExceptionObject as Exception);
                 };
+
+                // 测试钩子：--audit-menus 进程内审计所有菜单项（沙箱、无鼠标、不改真实配置）
+                if (Array.IndexOf(args, "--audit-menus") >= 0)
+                {
+                    Environment.ExitCode = MenuAudit.RunStandalone();
+                    return;
+                }
 
                 TrayContext ctx = new TrayContext();
 

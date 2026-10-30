@@ -470,8 +470,9 @@ namespace DeskBoxes
             for (int i = 0; i < avs.Length; i++)
             {
                 int av = avs[i];
-                ToolStripMenuItem it = new ToolStripMenuItem(av + "%");
-                it.Click += delegate { _st.HermesAlpha = (int)(av * 255 / 100); Render(); Raise(); };
+                ToolStripMenuItem it = new ToolStripMenuItem((av * 100 / 255) + "%");
+                it.Checked = _st.HermesAlpha == av;
+                it.Click += delegate { _st.HermesAlpha = av; Render(); Raise(); };
                 alphaMenu.DropDownItems.Add(it);
             }
             m.Items.Add(alphaMenu);
@@ -500,6 +501,7 @@ namespace DeskBoxes
                 Raise();
             });
 
+            if (MenuAudit.On) { MenuAudit.Capture("Hermes盒子-菜单", m); return; }
             DeskGuard.RaiseToFront(Handle);
             m.Show(this, at);
             MenuWatch.Watch(m);

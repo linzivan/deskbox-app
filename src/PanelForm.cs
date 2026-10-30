@@ -1322,6 +1322,7 @@ namespace DeskBoxes
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("刷新图标", null, delegate { IconLoader.Clear(); Render(); });
 
+            if (MenuAudit.On) { MenuAudit.Capture("面板-设置菜单", m); return; }
             DeskGuard.RaiseToFront(Handle);      // 面板先到最前，菜单才压得住其他 TOPMOST 盒子
             m.Show(this, at);
             MenuWatch.Watch(m);
@@ -1347,7 +1348,8 @@ namespace DeskBoxes
                     delegate { if (RequestAutoOrganize != null) RequestAutoOrganize(this, EventArgs.Empty); });
                 lm.Items.Add("新建盒子容纳它们…", null,
                     delegate { if (RequestNewSection != null) RequestNewSection(this, EventArgs.Empty); });
-                DeskGuard.RaiseToFront(Handle);      // 面板先到最前，菜单才压得住其他 TOPMOST 盒子
+                if (MenuAudit.On) { MenuAudit.Capture("分区-未分组菜单", lm); return; }
+            DeskGuard.RaiseToFront(Handle);      // 面板先到最前，菜单才压得住其他 TOPMOST 盒子
                 lm.Show(this, at);
                 MenuWatch.Watch(lm);
 
@@ -1396,6 +1398,7 @@ namespace DeskBoxes
                 Relayout(); Render(); RaiseChanged();
             });
 
+            if (MenuAudit.On) { MenuAudit.Capture("分区-菜单", m); return; }
             DeskGuard.RaiseToFront(Handle);      // 面板先到最前，菜单才压得住其他 TOPMOST 盒子
             m.Show(this, at);
             MenuWatch.Watch(m);
@@ -1485,6 +1488,7 @@ namespace DeskBoxes
                 Relayout(); Render(); RaiseChanged();
             });
 
+            if (MenuAudit.On) { MenuAudit.Capture("图标-菜单", m); return; }
             DeskGuard.RaiseToFront(Handle);      // 面板先到最前，菜单才压得住其他 TOPMOST 盒子
             m.Show(this, at);
             MenuWatch.Watch(m);
